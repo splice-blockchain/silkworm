@@ -26,8 +26,9 @@ limitations under the License.
 #include <silkworm/downloader/packets/get_block_bodies_packet.hpp>
 
 #include "db_tx.hpp"
-#include "statistics.hpp"
+#include "id_sequence.hpp"
 #include "types.hpp"
+#include "statistics.hpp"
 
 namespace silkworm {
 
@@ -43,7 +44,8 @@ class BodySequence {
     ~BodySequence();
 
     // sync current state - this must be done at body forward
-    void sync_current_state(BlockNum highest_body_in_db, BlockNum highest_header_in_db);
+    void start_bodies_downloading(BlockNum highest_body_in_db, BlockNum highest_header_in_db);
+    void stop_bodies_downloading();
 
     //! core functionalities: trigger the internal algorithms to decide what bodies we miss
     using MinBlock = BlockNum;
@@ -51,7 +53,7 @@ class BodySequence {
         -> std::tuple<GetBlockBodiesPacket66, std::vector<PeerPenalization>, MinBlock>;
 
     //! it needs to know if the request issued was not delivered
-    void request_nack(const GetBlockBodiesPacket66&);
+    void request_nack(time_point_t tp, const GetBlockBodiesPacket66&);
 
     //! core functionalities: process received bodies
     Penalty accept_requested_bodies(BlockBodiesPacket66&, const PeerId&);
@@ -60,7 +62,7 @@ class BodySequence {
     Penalty accept_new_block(const Block&, const PeerId&);
 
     //! core functionalities: returns bodies that are ready to be persisted
-    auto withdraw_ready_bodies() -> std::vector<Block>;
+    auto withdraw_ready_bodies() -> std::list<Block>;
 
     //! minor functionalities
     std::list<NewBlockPacket>& announces_to_do();
@@ -69,30 +71,27 @@ class BodySequence {
     [[nodiscard]] BlockNum highest_block_in_memory() const;
     [[nodiscard]] BlockNum lowest_block_in_memory() const;
     [[nodiscard]] BlockNum target_height() const;
-    [[nodiscard]] size_t outstanding_bodies(time_point_t tp) const;
+    [[nodiscard]] long outstanding_bodies(time_point_t tp) const;
+    [[nodiscard]] bool has_bodies_to_request(time_point_t tp, uint64_t active_peers) const;
+    [[nodiscard]] size_t ready_bodies() const;
 
     [[nodiscard]] const Download_Statistics& statistics() const;
 
     // downloading process tuning parameters
     static /*constexpr*/ seconds_t kRequestDeadline; // = std::chrono::seconds(30);
                                     // after this a response is considered lost it is related to Sentry's peerDeadline
-    static /*constexpr*/ milliseconds_t kNoPeerDelay; // = std::chrono::milliseconds(500);
+    static /*constexpr*/ seconds_t kNoPeerDelay; // = std::chrono::seconds(1);
                                                                        // delay when no peer accepted the last request
     static /*constexpr*/ size_t kPerPeerMaxOutstandingRequests; // = 4;
     static /*constexpr*/ BlockNum kMaxBlocksPerMessage; // = 128;               // go-ethereum client acceptance limit
     static constexpr BlockNum kMaxAnnouncedBlocks = 10000;
+    static constexpr BlockNum kMaxInMemoryBodies = 30000;
 
   protected:
-    void recover_initial_state();
-    void make_new_requests(GetBlockBodiesPacket66&, MinBlock&, time_point_t tp, seconds_t timeout);
-    auto renew_stale_requests(GetBlockBodiesPacket66&, MinBlock&, time_point_t tp, seconds_t timeout)
-        -> std::vector<PeerPenalization>;
-    void add_to_announcements(BlockHeader, BlockBody, Db::ReadOnlyAccess::Tx&);
-
-    static bool is_valid_body(const BlockHeader&, const BlockBody&);
+    using RequestId = uint64_t;
 
     struct BodyRequest {
-        uint64_t request_id{0};
+        RequestId request_id{0};
         Hash block_hash;
         BlockNum block_height{0};
         BlockHeader header;
@@ -109,29 +108,42 @@ class BodySequence {
         std::map<BlockNum, Block> blocks_;
     };
 
-    //using IncreasingHeightOrderedMap = std::map<BlockNum, BodyRequest>; // default ordering: less<BlockNum>
-    struct IncreasingHeightOrderedRequestContainer: public std::map<BlockNum, BodyRequest> {
-        using Impl = std::map<BlockNum, BodyRequest>;
+    struct TimeOrderedRequestContainer: public std::map<RequestId, std::list<BodyRequest>> { // ordering:less<RequestId>
+        using Impl = std::map<RequestId, std::list<BodyRequest>>;
         using Iter = Impl::iterator;
 
-        std::list<Iter> find_by_request_id(uint64_t request_id);
-        Iter find_by_hash(Hash oh, Hash tr);
+        [[nodiscard]] Iter find_by_request_id(RequestId);
+        [[nodiscard]] size_t compute_expired(time_point_t tp) const;
 
-        [[nodiscard]] BlockNum lowest_block() const;
-        [[nodiscard]] BlockNum highest_block() const;
+        [[nodiscard]] BodyRequest* find_by_block_num(BlockNum);
+        [[nodiscard]] size_t count() const;
+        [[nodiscard]] bool contains(BlockNum) const;
     };
 
-    IncreasingHeightOrderedRequestContainer body_requests_;
+    void recover_initial_state();
+    void make_new_requests(GetBlockBodiesPacket66&, std::list<BodyRequest>&, MinBlock&, time_point_t, seconds_t timeout);
+    auto renew_stale_requests(GetBlockBodiesPacket66&, std::list<BodyRequest>&, MinBlock&, time_point_t, seconds_t timeout)
+        -> std::vector<PeerPenalization>;
+    void add_to_announcements(BlockHeader, BlockBody, Db::ReadOnlyAccess::Tx&);
+    BlockHeader read_canonical_header(Db::ReadOnlyAccess::Tx& tx, BlockNum bn);
+    static bool is_valid_body(const BlockHeader&, const BlockBody&);
+
+    TimeOrderedRequestContainer pending_requests_;
+    std::map<BlockNum, BodyRequest> ready_requests_;
+
     AnnouncedBlocks announced_blocks_;
     std::list<NewBlockPacket> announcements_to_do_;
 
     Db::ReadOnlyAccess db_access_;
     [[maybe_unused]] const ChainIdentity& chain_identity_;
 
+    bool in_downloading_{false};
     BlockNum highest_body_in_db_{0};
     BlockNum headers_stage_height_{0};
+    BlockNum highest_requested_body_{0};
     time_point_t last_nack_;
-    size_t ready_bodies_{0};
+    MonotonicIdSequence id_sequence_;
+
     Download_Statistics statistics_;
 };
 

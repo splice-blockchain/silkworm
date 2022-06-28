@@ -112,7 +112,7 @@ Stage::Result BodiesStage::forward([[maybe_unused]] bool first_sync) {
 
     Stage::Result result;
 
-    auto constexpr KShortInterval = 200ms;
+    auto constexpr KShortInterval = 1s;
     auto constexpr kProgressUpdateInterval = 30s;
 
     StopWatch timing; timing.start();
@@ -129,7 +129,7 @@ Stage::Result BodiesStage::forward([[maybe_unused]] bool first_sync) {
 
         // sync status
         BlockNum headers_stage_height = tx.read_stage_progress(db::stages::kHeadersKey);
-        auto sync_command = sync_body_sequence(body_persistence.initial_height(), headers_stage_height);
+        auto sync_command = start_bodies_downloading(body_persistence.initial_height(), headers_stage_height);
         sync_command->result().get();  // blocking
 
         // prepare bodies, if any
@@ -139,8 +139,6 @@ Stage::Result BodiesStage::forward([[maybe_unused]] bool first_sync) {
         time_point_t last_update = system_clock::now();
         while (body_persistence.highest_height() < headers_stage_height && !block_downloader_.is_stopping()) {
 
-            send_body_requests();
-
             if (withdraw_command->completed_and_read()) {
                 // renew request
                 withdraw_command = withdraw_ready_bodies();
@@ -148,8 +146,21 @@ Stage::Result BodiesStage::forward([[maybe_unused]] bool first_sync) {
             else if (withdraw_command->result().wait_for(KShortInterval) == std::future_status::ready) {
                 // read response
                 auto bodies = withdraw_command->result().get();
+
+                // avoid wasting block exchange time
+                if (bodies.empty()) {
+                    std::this_thread::sleep_for(KShortInterval);
+                }
+
+                // inform user
+                if (bodies.size() > 100) {
+                    log::Info() << "[2/16 Bodies] Inserting " << bodies.size() << " bodies...";
+                }
+                StopWatch insertion_timing; insertion_timing.start();
+
                 // persist bodies
                 body_persistence.persist(bodies);
+
                 // check unwind condition
                 if (body_persistence.unwind_needed()) {
                     result.status = Result::UnwindNeeded;
@@ -159,6 +170,12 @@ Stage::Result BodiesStage::forward([[maybe_unused]] bool first_sync) {
                     result.status = Stage::Result::Done;
                 }
 
+                // inform user
+                if (bodies.size() > 100) {
+                    log::Info() << "[2/16 Bodies] Inserted bodies tot=" << bodies.size()
+                                << " (duration=" << StopWatch::format(insertion_timing.lap_duration()) << ")";
+                }
+                
                 // do announcements
                 send_announcements();
             }
@@ -170,9 +187,11 @@ Stage::Result BodiesStage::forward([[maybe_unused]] bool first_sync) {
                 height_progress.set(body_persistence.highest_height());
 
                 log::Info() << "[2/16 Bodies] Wrote block bodies number=" << height_progress.get() << " (+"
-                            << height_progress.delta() << "), " << height_progress.throughput() << " bodies/secs";
+                            << height_progress.delta() << "), " << height_progress.throughput() << " bodies/s";
             }
         }
+
+        stop_bodies_downloading();
 
         auto bodies_downloaded = body_persistence.highest_height() - body_persistence.initial_height();
         log::Info() << "[2/16 Bodies] Downloading completed, wrote " << bodies_downloaded << " bodies,"
@@ -220,18 +239,12 @@ Stage::Result BodiesStage::unwind_to(BlockNum new_height, Hash bad_block) {
     return result;
 }
 
-void BodiesStage::send_body_requests() {
-    auto message = std::make_shared<OutboundGetBlockBodies>();
-
-    block_downloader_.accept(message);
-}
-
-auto BodiesStage::sync_body_sequence(BlockNum highest_body, BlockNum highest_header)
+auto BodiesStage::start_bodies_downloading(BlockNum highest_body, BlockNum highest_header)
     -> std::shared_ptr<InternalMessage<void>> {
 
     auto message = std::make_shared<InternalMessage<void>>(
         [highest_body, highest_header](HeaderChain&, BodySequence& bs) {
-            bs.sync_current_state(highest_body, highest_header);
+            bs.start_bodies_downloading(highest_body, highest_header);
         });
 
     block_downloader_.accept(message);
@@ -239,8 +252,21 @@ auto BodiesStage::sync_body_sequence(BlockNum highest_body, BlockNum highest_hea
     return message;
 }
 
-auto BodiesStage::withdraw_ready_bodies() -> std::shared_ptr<InternalMessage<std::vector<Block>>> {
-    using result_t = std::vector<Block>;
+auto BodiesStage::stop_bodies_downloading()
+    -> std::shared_ptr<InternalMessage<void>> {
+
+    auto message = std::make_shared<InternalMessage<void>>(
+        [](HeaderChain&, BodySequence& bs) {
+            bs.stop_bodies_downloading();
+        });
+
+    block_downloader_.accept(message);
+
+    return message;
+}
+
+auto BodiesStage::withdraw_ready_bodies() -> std::shared_ptr<InternalMessage<std::list<Block>>> {
+    using result_t = std::list<Block>;
 
     auto message = std::make_shared<InternalMessage<result_t>>([](HeaderChain&, BodySequence& bs) {
         return bs.withdraw_ready_bodies();

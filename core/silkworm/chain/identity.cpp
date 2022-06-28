@@ -67,7 +67,29 @@ static ChainIdentity goerli_identity() {
     return id;
 }
 
+static ChainIdentity ropsten_identity() {
+    ChainIdentity id;
+
+    id.name = "ropsten";
+    id.chain = kRopstenConfig;
+    id.genesis_hash = 0x41941023680923e0fe4d74a34bdac8141f2540e3ae90623718e47d66d1ca4a2d_bytes32;
+
+    return id;
+}
+
+static ChainIdentity rinkeby_identity() {
+    ChainIdentity id;
+
+    id.name = "rinkeby";
+    id.chain = kRinkebyConfig;
+    id.genesis_hash = 0x6341fd3daf94b748c72ced5a5b26028f2474f5f00d824504e4fa37a75767e177_bytes32;
+
+    return id;
+}
+
 ChainIdentity ChainIdentity::mainnet = mainnet_identity();
 ChainIdentity ChainIdentity::goerli = goerli_identity();
+ChainIdentity ChainIdentity::ropsten = ropsten_identity();
+ChainIdentity ChainIdentity::rinkeby = rinkeby_identity();
 
 }  // namespace silkworm

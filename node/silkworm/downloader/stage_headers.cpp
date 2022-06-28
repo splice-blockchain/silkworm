@@ -120,7 +120,7 @@ auto HeadersStage::forward(bool first_sync) -> Stage::Result {
                 height_progress.set(header_persistence.highest_height());
 
                 log::Info() << "[1/16 Headers] Wrote block headers number=" << height_progress.get() << " (+"
-                            << height_progress.delta() << "), " << height_progress.throughput() << " headers/secs";
+                            << height_progress.delta() << "), " << height_progress.throughput() << " headers/s";
             }
         }
 

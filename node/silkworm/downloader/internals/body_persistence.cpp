@@ -36,7 +36,7 @@ BlockNum BodyPersistence::unwind_point() const { return unwind_point_; }
 Hash BodyPersistence::bad_block() const { return bad_block_; }
 void BodyPersistence::set_preverified_height(BlockNum height) { preverified_height_ = height; }
 
-void BodyPersistence::persist(const Block& block) {
+bool BodyPersistence::persist(const Block& block) {
     Hash block_hash = block.header.hash(); // save cpu
     BlockNum block_num = block.header.number;
 
@@ -53,7 +53,7 @@ void BodyPersistence::persist(const Block& block) {
         unwind_needed_ = true;
         unwind_point_ = block_num - 1;
         bad_block_ = block_hash;
-        return;
+        return false;
     }
 
     if (!tx_.has_body(block_hash, block_num))
@@ -63,11 +63,14 @@ void BodyPersistence::persist(const Block& block) {
         highest_height_ = block_num;
         tx_.write_stage_progress(db::stages::kBlockBodiesKey, block_num);
     }
+
+    return true;
 }
 
-void BodyPersistence::persist(const std::vector<Block>& blocks) {
+void BodyPersistence::persist(const std::list<Block>& blocks) {
     for(auto& block: blocks) {
-        persist(block);
+        bool persisted = persist(block);
+        if (!persisted) break;
     }
 }
 

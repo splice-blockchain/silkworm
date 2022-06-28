@@ -32,6 +32,8 @@ struct ChainIdentity {
 
     static ChainIdentity mainnet;
     static ChainIdentity goerli;
+    static ChainIdentity ropsten;
+    static ChainIdentity rinkeby;
 };
 
 }  // namespace silkworm

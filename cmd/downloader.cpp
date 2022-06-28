@@ -75,43 +75,43 @@ int main(int argc, char* argv[]) {
     int return_value = 0;
 
     try {
-    NodeSettings node_settings{};
-    node_settings.sentry_api_addr = "127.0.0.1:9091";
+        NodeSettings node_settings{};
+        node_settings.sentry_api_addr = "127.0.0.1:9091";
 
-    log::Settings log_settings;
-    log_settings.log_threads = true;
-    log_settings.log_file = "downloader.log";
-    log_settings.log_verbosity = log::Level::kInfo;
-    log_settings.log_thousands_sep = '\'';
+        log::Settings log_settings;
+        log_settings.log_threads = true;
+        log_settings.log_file = "downloader.log";
+        log_settings.log_verbosity = log::Level::kInfo;
+        log_settings.log_thousands_sep = '\'';
 
-    // test & measurement only parameters [to remove]
-    BodySequence::kMaxBlocksPerMessage = 128;
-    BodySequence::kPerPeerMaxOutstandingRequests = 4;
-    int requestDeadlineSeconds = 30; // BodySequence::kRequestDeadline = std::chrono::seconds(30);
-    int noPeerDelayMilliseconds = 1000;  // BodySequence::kNoPeerDelay = std::chrono::milliseconds(1000)
+        // test & measurement only parameters [to remove]
+        BodySequence::kMaxBlocksPerMessage = 128;
+        BodySequence::kPerPeerMaxOutstandingRequests = 4;
+        int requestDeadlineSeconds = 30; // BodySequence::kRequestDeadline = std::chrono::seconds(30);
+        int noPeerDelaySeconds = 1;  // BodySequence::kNoPeerDelay = std::chrono::seconds(1)
 
-    app.add_option("--max_blocks_per_req", BodySequence::kMaxBlocksPerMessage,
+        app.add_option("--max_blocks_per_req", BodySequence::kMaxBlocksPerMessage,
                        "Max number of blocks requested to peers in a single request")
             ->capture_default_str();
-    app.add_option("--max_requests_per_peer", BodySequence::kPerPeerMaxOutstandingRequests,
+        app.add_option("--max_requests_per_peer", BodySequence::kPerPeerMaxOutstandingRequests,
                        "Max number of pending request made to each peer")
             ->capture_default_str();
-    app.add_option("--request_deadline_s", requestDeadlineSeconds,
+        app.add_option("--request_deadline_s", requestDeadlineSeconds,
                        "Time (secs) after which a response is considered lost and will be re-tried")
             ->capture_default_str();
-    app.add_option("--no_peer_delay_ms", noPeerDelayMilliseconds,
-                       "Time (msecs) to wait before making a new request when no peer accepted the last")
+        app.add_option("--no_peer_delay_s", noPeerDelaySeconds,
+                       "Time (secs) to wait before making a new request when no peer accepted the last")
             ->capture_default_str();
 
-    BodySequence::kRequestDeadline = std::chrono::seconds(requestDeadlineSeconds);
-    BodySequence::kNoPeerDelay = std::chrono::milliseconds(noPeerDelayMilliseconds);
-    // test & measurement only parameters end
+        BodySequence::kRequestDeadline = std::chrono::seconds(requestDeadlineSeconds);
+        BodySequence::kNoPeerDelay = std::chrono::seconds(noPeerDelaySeconds);
+        // test & measurement only parameters end
 
-    // Command line parsing
-    cmd::parse_silkworm_command_line(app, argc, argv, log_settings, node_settings);
+        // Command line parsing
+        cmd::parse_silkworm_command_line(app, argc, argv, log_settings, node_settings);
 
-    log::init(log_settings);
-    log::set_thread_name("stage-loop    ");
+        log::init(log_settings);
+        log::set_thread_name("stage-loop    ");
 
         // Output BuildInfo
         auto build_info{silkworm_get_buildinfo()};
@@ -124,7 +124,7 @@ int main(int argc, char* argv[]) {
         log::Message("BlockExchange parameter", {"--max_blocks_per_req", to_string(BodySequence::kMaxBlocksPerMessage)});
         log::Message("BlockExchange parameter", {"--max_requests_per_peer", to_string(BodySequence::kPerPeerMaxOutstandingRequests)});
         log::Message("BlockExchange parameter", {"--request_deadline_s", to_string(requestDeadlineSeconds)});
-        log::Message("BlockExchange parameter", {"--no_peer_delay_ms", to_string(noPeerDelayMilliseconds)});
+        log::Message("BlockExchange parameter", {"--no_peer_delay_s", to_string(noPeerDelaySeconds)});
 
         // Prepare database
         cmd::run_preflight_checklist(node_settings);

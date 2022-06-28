@@ -27,6 +27,7 @@
 #include "preverified_hashes.hpp"
 #include "chain_elements.hpp"
 #include "header_only_state.hpp"
+#include "id_sequence.hpp"
 #include "statistics.hpp"
 
 namespace silkworm {
@@ -162,12 +163,7 @@ class HeaderChain {
     ConsensusEnginePtr consensus_engine_;
     CustomHeaderOnlyChainState chain_state_;
     time_point_t last_skeleton_request;
-
-    uint64_t generate_request_id();
-    uint64_t is_valid_request_id(uint64_t request_id);
-
-    uint64_t request_id_prefix;
-    uint64_t request_count = 0;
+    MonotonicIdSequence id_sequence_;
 
     Download_Statistics statistics_;
     std::string skeleton_condition_;

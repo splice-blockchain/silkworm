@@ -30,8 +30,8 @@ class BodyPersistence {
   public:
     BodyPersistence(Db::ReadWriteAccess::Tx&, const ChainIdentity&);
 
-    void persist(const Block&);
-    void persist(const std::vector<Block>&);
+    bool persist(const Block&);
+    void persist(const std::list<Block>&);
     void close();
 
     static void remove_bodies(BlockNum new_height, Hash bad_block, Db::ReadWriteAccess::Tx& tx);
@@ -47,8 +47,8 @@ class BodyPersistence {
   private:
     using ConsensusEnginePtr = std::unique_ptr<consensus::IEngine>;
 
-    [[maybe_unused]] Db::ReadWriteAccess::Tx& tx_;
-    [[maybe_unused]] ConsensusEnginePtr consensus_engine_;
+    Db::ReadWriteAccess::Tx& tx_;
+    ConsensusEnginePtr consensus_engine_;
     db::Buffer chain_state_;
 
     BlockNum initial_height_{0};
