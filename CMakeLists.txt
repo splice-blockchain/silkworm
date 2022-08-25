@@ -154,7 +154,6 @@ if(NOT MSVC)
   add_compile_options(-Wshadow -Wimplicit-fallthrough -Wsign-conversion)
   add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wold-style-cast>)
   add_compile_options(-Wno-missing-field-initializers -Wnon-virtual-dtor)
-  add_compile_options(-Wuninitialized) # Treat missing initialization of var as error
 
   if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     add_compile_options(-Wno-attributes)
@@ -169,9 +168,13 @@ if(NOT MSVC)
     add_compile_definitions(_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS)
     add_compile_options(-Wthread-safety)
   endif()
+
 else()
 
-  add_compile_options(/we4101) # Treat missing initialization of var as error
+  add_compile_options(/W4)
+  add_compile_options(/we4701) # Treat potentially uninitialized local variable as error
+  add_compile_options(/wd4125) # Suppress "decimal digit terminates octal sequence"
+  add_compile_options(/wd5054) # Suppress operator '*': deprecated between enumerations of different types (protobuf)
 
 endif()
 
