@@ -18,6 +18,7 @@
 #include <atomic>
 
 #include <silkworm/chain/identity.hpp>
+#include <silkworm/common/measure.hpp>
 #include <silkworm/db/access_layer.hpp>
 #include <silkworm/downloader/internals/types.hpp>
 #include <silkworm/downloader/messages/internal_message.hpp>
@@ -64,7 +65,7 @@ namespace silkworm {
  */
 class HeadersStage : public Stage {
   public:
-    HeadersStage(Status&, BlockExchange&);
+    HeadersStage(Status&, BlockExchange&, NodeSettings*);
     HeadersStage(const HeadersStage&) = delete;  // not copyable
     HeadersStage(HeadersStage&&) = delete;       // nor movable
     ~HeadersStage();
@@ -80,10 +81,10 @@ class HeadersStage : public Stage {
     auto withdraw_stable_headers() -> std::shared_ptr<InternalMessage<std::tuple<Headers, bool>>>;
     auto update_bad_headers(std::set<Hash>) -> std::shared_ptr<InternalMessage<void>>;
 
-    BlockExchange& block_downloader_;
-
-    std::vector<std::string> get_log_progress(); // thread safe
+    std::vector<std::string> get_log_progress() override; // thread safe
     std::atomic<BlockNum> current_height_;
+
+    BlockExchange& block_downloader_;
 };
 
 }  // namespace silkworm
