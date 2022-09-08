@@ -41,7 +41,8 @@ Server::Server(std::string host, uint16_t port) : host_(std::move(host)), port_(
 
 awaitable<void> Server::start(
     silkworm::rpc::ServerContextPool& context_pool,
-    common::EccKeyPair node_key) {
+    common::EccKeyPair node_key,
+    std::string client_id) {
     auto executor = co_await this_coro::executor;
 
     ip::tcp::resolver resolver{executor};
@@ -73,11 +74,14 @@ awaitable<void> Server::start(
         co_await acceptor.async_accept(stream.socket(), use_awaitable);
 
         auto remote_endpoint = stream.socket().remote_endpoint();
-        log::Debug() << "RLPx server client connected from " << remote_endpoint.address().to_string() << ":" << remote_endpoint.port();
+        log::Debug() << "RLPx server client connected from "
+                     << remote_endpoint.address().to_string() << ":" << remote_endpoint.port();
 
         auto peer = std::make_unique<Peer>(
             std::move(stream),
             node_key,
+            client_id,
+            port_,
             std::nullopt);
         auto handler = co_spawn(client_context, peer->handle(), use_future);
 

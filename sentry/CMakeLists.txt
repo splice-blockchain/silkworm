@@ -16,11 +16,14 @@
 
 set(TARGET silkworm_sentry)
 
+hunter_add_package(Snappy)
+
 find_package(absl CONFIG REQUIRED)
 find_package(Boost CONFIG REQUIRED thread)
 find_package(gRPC CONFIG REQUIRED)
 find_package(Microsoft.GSL CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(Snappy CONFIG REQUIRED)
 
 get_filename_component(MAIN_DIR ../ ABSOLUTE)
 
@@ -34,6 +37,8 @@ file(GLOB GRPC_SRC CONFIGURE_DEPENDS "${GRPC_SRC_DIR}/*.h" "${GRPC_SRC_DIR}/*.cc
 list(PREPEND GRPC_SRC "${MAIN_DIR}/interfaces/types/types.pb.cc")
 list(PREPEND GRPC_SRC "${MAIN_DIR}/interfaces/types/types.pb.h")
 list(PREPEND SRC ${GRPC_SRC})
+
+list(PREPEND SRC "${MAIN_DIR}/third_party/stbrumme-keccak/keccak.cpp")
 
 add_library(${TARGET} ${SRC})
 
@@ -53,6 +58,7 @@ endif()
 target_include_directories(${TARGET} PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   "${MAIN_DIR}/interfaces"
+  "${MAIN_DIR}/third_party/stbrumme-keccak"
 )
 
 set(LIBS
@@ -61,9 +67,12 @@ set(LIBS
   Microsoft.GSL::GSL
   protobuf::libprotobuf
   OpenSSL::Crypto
+  Snappy::snappy
+
   silkpre
   silkworm_core
   silkworm_node
+  silkworm-buildinfo
 )
 
 if(MSVC)

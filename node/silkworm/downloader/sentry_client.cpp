@@ -25,7 +25,7 @@
 
 namespace silkworm {
 
-static auto kMaxReceiveMessageSize = 10_Mebi;  // reference: eth/66 protocol
+constexpr int kMaxReceiveMessageSize = 10_Mebi;  // reference: eth/66 protocol
 
 static std::shared_ptr<grpc::Channel> create_custom_channel(const std::string& sentry_addr) {
     grpc::ChannelArguments custom_args{};
@@ -130,7 +130,7 @@ void SentryClient::stats_receiving_loop() {
         while (!is_stopping() && receive_peer_stats_.receive_one_reply()) {
             const sentry::PeerEvent& stat = receive_peer_stats_.reply();
 
-            auto peerId = string_from_H512(stat.peer_id());
+            auto peerId = bytes_from_H512(stat.peer_id());
             const char* event = "";
             if (stat.event_id() == sentry::PeerEvent::Connect) {
                 event = "connected";
@@ -140,7 +140,7 @@ void SentryClient::stats_receiving_loop() {
                 if (active_peers_ > 0) active_peers_--;  // workaround, to fix this we need to improve the interface
             }                                            // or issue a count_active_peers()
 
-            log::Info() << "Peer " << peerId << " " << event << ", active " << active_peers_;
+            log::Info() << "Peer " << human_readable_id(peerId) << " " << event << ", active " << active_peers_;
         }
 
     } catch (const std::exception& e) {

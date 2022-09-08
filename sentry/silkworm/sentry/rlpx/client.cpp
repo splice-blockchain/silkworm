@@ -29,7 +29,10 @@ namespace silkworm::sentry::rlpx {
 
 using namespace boost::asio;
 
-awaitable<void> Client::start(common::EccKeyPair node_key) {
+awaitable<void> Client::start(
+    common::EccKeyPair node_key,
+    std::string client_id,
+    uint16_t node_listen_port) {
     if (peer_urls_.empty()) {
         co_return;
     }
@@ -38,18 +41,24 @@ awaitable<void> Client::start(common::EccKeyPair node_key) {
     auto executor = co_await this_coro::executor;
 
     ip::tcp::resolver resolver{executor};
-    auto endpoints = co_await resolver.async_resolve(peer_url.ip().to_string(), std::to_string(peer_url.port()), use_awaitable);
+    auto endpoints = co_await resolver.async_resolve(
+        peer_url.ip().to_string(),
+        std::to_string(peer_url.port()),
+        use_awaitable);
     const ip::tcp::endpoint& endpoint = *endpoints.cbegin();
 
     common::SocketStream stream{executor};
     co_await stream.socket().async_connect(endpoint, use_awaitable);
 
     auto remote_endpoint = stream.socket().remote_endpoint();
-    log::Debug() << "RLPx client connected to " << remote_endpoint.address().to_string() << ":" << remote_endpoint.port();
+    log::Debug() << "RLPx client connected to "
+                 << remote_endpoint.address().to_string() << ":" << remote_endpoint.port();
 
     Peer peer{
         std::move(stream),
         node_key,
+        client_id,
+        node_listen_port,
         {peer_url.public_key()},
     };
 

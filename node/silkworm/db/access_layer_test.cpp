@@ -21,13 +21,12 @@
 #include <silkworm/chain/genesis.hpp>
 #include <silkworm/chain/protocol_param.hpp>
 #include <silkworm/common/test_context.hpp>
+#include <silkworm/common/test_util.hpp>
 #include <silkworm/db/buffer.hpp>
 #include <silkworm/db/prune_mode.hpp>
 #include <silkworm/db/tables.hpp>
 #include <silkworm/execution/execution.hpp>
-#include <silkworm/stagedsync/stagedsync.hpp>
-
-#include "stages.hpp"
+#include <silkworm/stagedsync/stage_history_index.hpp>
 
 namespace silkworm {
 
@@ -501,24 +500,26 @@ namespace db {
         block1.header.number = 1;
         block1.header.beneficiary = miner_a;
         // miner_a gets one block reward
-        REQUIRE(execute_block(block1, buffer, kMainnetConfig) == ValidationResult::kOk);
+        REQUIRE(execute_block(block1, buffer, test::kFrontierConfig) == ValidationResult::kOk);
 
         Block block2;
         block2.header.number = 2;
         block2.header.beneficiary = miner_b;
         // miner_a gets nothing
-        REQUIRE(execute_block(block2, buffer, kMainnetConfig) == ValidationResult::kOk);
+        REQUIRE(execute_block(block2, buffer, test::kFrontierConfig) == ValidationResult::kOk);
 
         Block block3;
         block3.header.number = 3;
         block3.header.beneficiary = miner_a;
         // miner_a gets another block reward
-        REQUIRE(execute_block(block3, buffer, kMainnetConfig) == ValidationResult::kOk);
+        REQUIRE(execute_block(block3, buffer, test::kFrontierConfig) == ValidationResult::kOk);
 
         buffer.write_to_db();
+        db::stages::write_stage_progress(txn, db::stages::kExecutionKey, 3);
 
         db::RWTxn tm{txn};
-        REQUIRE(stagedsync::stage_account_history(tm, context.dir().etl().path()) == stagedsync::StageResult::kSuccess);
+        stagedsync::HistoryIndex stage_history_index(&context.node_settings());
+        REQUIRE(stage_history_index.forward(tm) == stagedsync::StageResult::kSuccess);
 
         std::optional<Account> current_account{read_account(txn, miner_a)};
         REQUIRE(current_account.has_value());
@@ -526,7 +527,7 @@ namespace db {
 
         std::optional<Account> historical_account{read_account(txn, miner_a, /*block_number=*/2)};
         REQUIRE(historical_account.has_value());
-        CHECK(historical_account->balance == param::kBlockRewardFrontier);
+        CHECK(intx::to_string(historical_account->balance) == std::to_string(param::kBlockRewardFrontier));
     }
 
     TEST_CASE("read_storage") {
