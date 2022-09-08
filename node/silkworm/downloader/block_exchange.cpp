@@ -41,7 +41,6 @@ BlockExchange::BlockExchange(SentryClient& sentry, const db::ROAccess& dba, cons
 
 BlockExchange::~BlockExchange() {
     stop();
-    log::Info() << "BlockExchange destroyed";
 }
 
 const ChainIdentity& BlockExchange::chain_identity() const { return chain_identity_; }
@@ -70,9 +69,9 @@ void BlockExchange::execution_loop() {
     using namespace std::chrono_literals;
     log::set_thread_name("block-exchange");
 
-    sentry_.subscribe(SentryClient::Scope::BlockAnnouncements,
+    sentry_.subscribe(rpc::ReceiveMessages::Scope::BlockAnnouncements,
                       [this](const sentry::InboundMessage& msg) { receive_message(msg); });
-    sentry_.subscribe(SentryClient::Scope::BlockRequests,
+    sentry_.subscribe(rpc::ReceiveMessages::Scope::BlockRequests,
                       [this](const sentry::InboundMessage& msg) { receive_message(msg); });
 
     auto constexpr kShortInterval = 1000ms;
