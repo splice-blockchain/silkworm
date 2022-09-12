@@ -93,6 +93,9 @@ static std::unique_ptr<IEngine> pre_merge_engine(const ChainConfig& chain_config
 
 std::unique_ptr<IEngine> engine_factory(const ChainConfig& chain_config) {
     std::unique_ptr<IEngine> engine{pre_merge_engine(chain_config)};
+    return engine;
+    // temporarily commenting out merge engine creation to do a sync test
+    /*
     if (!engine) {
         return nullptr;
     }
@@ -102,6 +105,7 @@ std::unique_ptr<IEngine> engine_factory(const ChainConfig& chain_config) {
     } else {
         return engine;
     }
+    */
 }
 
 }  // namespace silkworm::consensus
