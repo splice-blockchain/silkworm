@@ -77,10 +77,11 @@ int main(int argc, char* argv[]) {
     cli.get_formatter()->column_width(50);
 
     try {
-        log::Settings log_settings{};  // Holds logging settings
-        NodeSettings node_settings{};  // Holds node settings
+        log::Settings log_settings{};      // Holds logging settings
+        NodeSettings node_settings{};      // Holds node settings
+        SentryClientSettings sentry_settings{};  // Holds node's sentry settings
 
-        cmd::parse_silkworm_command_line(cli, argc, argv, log_settings, node_settings);
+        cmd::parse_silkworm_command_line(cli, argc, argv, log_settings, node_settings, sentry_settings);
 
         SignalHandler::init();    // Trap OS signals
         log::init(log_settings);  // Initialize logging with cli settings

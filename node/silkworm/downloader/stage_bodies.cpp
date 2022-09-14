@@ -49,10 +49,10 @@ Stage::Result BodiesStage::forward(db::RWTxn& tx) {
 
     StopWatch timing;
     timing.start();
-    log::Info() << "[2/16 Bodies] Start";
+    log::Info(log_prefix_) << "Start";
 
     if (block_downloader_.is_stopping()) {
-        log::Error() << "[2/16 Bodies] Aborted, block exchange is down";
+        log::Error(log_prefix_) << "Aborted, block exchange is down";
         return Stage::Result::Error;
     }
 
@@ -108,13 +108,13 @@ Stage::Result BodiesStage::forward(db::RWTxn& tx) {
 
                 height_progress.set(body_persistence.highest_height());
 
-                log::Info() << "[2/16 Bodies] Wrote block bodies number=" << height_progress.get() << " (+"
+                log::Info(log_prefix_) << "Wrote block bodies number=" << height_progress.get() << " (+"
                             << height_progress.delta() << "), " << height_progress.throughput() << " bodies/secs";
             }
         }
 
         auto bodies_downloaded = body_persistence.highest_height() - body_persistence.initial_height();
-        log::Info() << "[2/16 Bodies] Downloading completed, wrote " << bodies_downloaded << " bodies,"
+        log::Info(log_prefix_) << "Downloading completed, wrote " << bodies_downloaded << " bodies,"
                     << " last=" << body_persistence.highest_height()
                     << " duration=" << StopWatch::format(timing.lap_duration());
 
@@ -122,14 +122,14 @@ Stage::Result BodiesStage::forward(db::RWTxn& tx) {
 
         tx.commit();  // this will commit if the tx was started here
 
-        log::Info() << "[2/16 Bodies] Done, duration= " << StopWatch::format(timing.lap_duration());
+        log::Info(log_prefix_) << "Done, duration= " << StopWatch::format(timing.lap_duration());
 
         if (result == Stage::Result::Unspecified) {
             result = Stage::Result::Done;
         }
 
     } catch (const std::exception& e) {
-        log::Error() << "[2/16 Bodies] Aborted due to exception: " << e.what();
+        log::Error(log_prefix_) << "Aborted due to exception: " << e.what();
 
         // tx rollback executed automatically if needed
         result = Stage::Result::Error;
@@ -138,31 +138,34 @@ Stage::Result BodiesStage::forward(db::RWTxn& tx) {
     return result;
 }
 
-Stage::Result BodiesStage::unwind(db::RWTxn& tx, BlockNum new_height) {
-    Stage::Result result;
-
+Stage::Result BodiesStage::unwind(db::RWTxn& tx) {
+    Stage::Result result{Stage::Result::Done};
     operation_ = OperationType::Unwind;
 
     StopWatch timing;
     timing.start();
-    log::Info() << "[2/16 Bodies] Unwind start";
+    log::Info(log_prefix_) << "Unwind start";
 
     current_height_ = db::stages::read_stage_progress(tx, db::stages::kBlockBodiesKey);
     get_log_progress();  // this is a trick to set log progress initial value, please improve
 
     try {
-        BodyPersistence::remove_bodies(new_height, shared_status_.bad_block, tx);
+        if (!shared_status_.unwind_point.has_value()) {
+            operation_ = OperationType::None;
+            return result;
+        }
 
-        current_height_ = new_height;
+        BodyPersistence::remove_bodies(shared_status_.unwind_point.value(), shared_status_.bad_block_hash, tx);
+        current_height_ = shared_status_.unwind_point.value();
 
         tx.commit();
 
-        log::Info() << "[1/16 Bodies] Unwind completed, duration= " << StopWatch::format(timing.lap_duration());
+        log::Info(log_prefix_) << "Unwind completed, duration= " << StopWatch::format(timing.lap_duration());
 
         result = Stage::Result::Done;
 
     } catch (const std::exception& e) {
-        log::Error() << "[1/16 Bodies] Unwind aborted due to exception: " << e.what();
+        log::Error(log_prefix_) << "Unwind aborted due to exception: " << e.what();
 
         // tx rollback executed automatically if needed
         result = Stage::Result::Error;

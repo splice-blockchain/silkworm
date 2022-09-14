@@ -60,4 +60,7 @@ inline constexpr ChainIdentity kSepoliaIdentity{
     .genesis_hash = 0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9_bytes32,
 };
 
+//! \brief Looks up a known chain identity provided its chain ID
+std::optional<ChainIdentity> lookup_known_chain_identity(uint64_t chain_id);
+
 }  // namespace silkworm

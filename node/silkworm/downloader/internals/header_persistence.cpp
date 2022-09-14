@@ -221,14 +221,10 @@ void HeaderPersistence::update_canonical_chain(BlockNum height, Hash hash) {  //
 }
 
 void HeaderPersistence::finish() {
-    if (finished_) return;
-
-    if (unwind_needed()) return;
-
+    if (finished_ || unwind_needed()) return;
     if (highest_height() != initial_height()) {
         update_canonical_chain(highest_height(), highest_hash());
     }
-
     finished_ = true;
 }
 

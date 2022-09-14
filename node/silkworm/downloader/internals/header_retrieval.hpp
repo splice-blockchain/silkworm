@@ -27,11 +27,12 @@ namespace silkworm {
  */
 class HeaderRetrieval {
   public:
-    static const long soft_response_limit = 2 * 1024 * 1024;  // Target maximum size of returned blocks
-    static const long est_header_rlp_size = 500;              // Approximate size of an RLP encoded block header
-    static const long max_headers_serve = 1024;               // Amount of block headers to be fetched per retrieval request
+    static constexpr size_t kSoftResponseLimit = 2 * 1024 * 1024;  // Target maximum size of returned blocks
+    static constexpr size_t kEstimateHeaderRlpSize = 500;          // Approximate size of an RLP encoded block header
+    static constexpr size_t kHardResponseLimit = 1024;             // Max number of block headers to be fetched per retrieve request
 
-    explicit HeaderRetrieval(db::ROAccess);
+    explicit HeaderRetrieval(db::ROAccess db_ro_access)
+        : db_tx_{db_ro_access.start_ro_tx()} {};
 
     // Headers
     std::vector<BlockHeader> recover_by_hash(Hash origin, uint64_t amount, uint64_t skip, bool reverse);

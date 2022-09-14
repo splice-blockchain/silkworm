@@ -44,7 +44,9 @@ BlockExchange::~BlockExchange() {
 }
 
 const ChainIdentity& BlockExchange::chain_identity() const { return chain_identity_; }
+
 const PreverifiedHashes& BlockExchange::preverified_hashes() const { return preverified_hashes_; }
+
 SentryClient& BlockExchange::sentry() const { return sentry_; }
 
 void BlockExchange::accept(std::shared_ptr<Message> message) { messages_.push(message); }
@@ -68,7 +70,6 @@ void BlockExchange::receive_message(const sentry::InboundMessage& raw_message) {
 void BlockExchange::execution_loop() {
     using namespace std::chrono;
     using namespace std::chrono_literals;
-    log::set_thread_name("block-exchange");
 
     sentry_.subscribe(rpc::ReceiveMessages::Scope::BlockAnnouncements,
                       [this](const sentry::InboundMessage& msg) { receive_message(msg); });
@@ -89,22 +90,20 @@ void BlockExchange::execution_loop() {
 
         // log status
         auto now = system_clock::now();
-        if (silkworm::log::test_verbosity(silkworm::log::Level::kDebug) && now - last_update > 30s) {
+        if (silkworm::log::test_verbosity(silkworm::log::Level::kTrace) && now - last_update > 30s) {
             log_status();
             last_update = now;
         }
     }
-
-    stop();
-    log::Warning() << "BlockExchange execution_loop is stopping...";
+    log::Warning() << "BlockExchange execution_loop ended";
 }
 
 void BlockExchange::log_status() {
-    log::Debug() << "BlockExchange messages: " << std::setfill('_') << std::setw(5) << std::right << messages_.size()
+    log::Trace() << "BlockExchange messages: " << std::setfill('_') << std::setw(5) << std::right << messages_.size()
                  << " in queue";
 
     auto [min_anchor_height, max_anchor_height] = header_chain_.anchor_height_range();
-    log::Debug() << "BlockExchange headers: " << std::setfill('_') << "links= " << std::setw(7) << std::right
+    log::Trace() << "BlockExchange headers: " << std::setfill('_') << "links= " << std::setw(7) << std::right
                  << header_chain_.pending_links() << ", anchors= " << std::setw(3) << std::right
                  << header_chain_.anchors() << ", db-height= " << std::setw(10) << std::right
                  << header_chain_.highest_block_in_db() << ", mem-height= " << std::setw(10) << std::right
@@ -112,7 +111,7 @@ void BlockExchange::log_status() {
                  << ", net-height= " << std::setw(10) << std::right << header_chain_.top_seen_block_height()
                  << "; stats: " << header_chain_.statistics();
 
-    log::Debug() << "BlockExchange bodies:  " << std::setfill('_') << "outstanding bodies= " << std::setw(6)
+    log::Trace() << "BlockExchange bodies:  " << std::setfill('_') << "outstanding bodies= " << std::setw(6)
                  << std::right << body_sequence_.outstanding_bodies(std::chrono::system_clock::now()) << "  "
                  << ", db-height= " << std::setw(10) << std::right << body_sequence_.highest_block_in_db()
                  << ", mem-height= " << std::setw(10) << std::right << body_sequence_.lowest_block_in_memory()

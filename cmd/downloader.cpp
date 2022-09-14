@@ -19,68 +19,307 @@
 #include <thread>
 
 #include <CLI/CLI.hpp>
+#include <boost/format.hpp>
 
 #include <silkworm/buildinfo.h>
-#include <silkworm/common/directories.hpp>
+#include <silkworm/common/asio_timer.hpp>
 #include <silkworm/common/log.hpp>
 #include <silkworm/common/settings.hpp>
+#include <silkworm/common/stopwatch.hpp>
 #include <silkworm/concurrency/signal_handler.hpp>
-#include <silkworm/db/access_layer.hpp>
+#include <silkworm/concurrency/worker.hpp>
+#include <silkworm/db/stages.hpp>
 #include <silkworm/downloader/internals/body_sequence.hpp>
 #include <silkworm/downloader/internals/header_retrieval.hpp>
+#include <silkworm/downloader/stage_bodies.hpp>
 #include <silkworm/downloader/stage_headers.hpp>
 
 #include "common.hpp"
-#include "silkworm/downloader/stage_bodies.hpp"
 
 using namespace silkworm;
 
-// stage-loop, forwarding phase
-using LastStage = size_t;
-std::tuple<Stage::Result, LastStage> forward(std::vector<Stage*> stages, db::RWTxn& txn) {
-    using Status = Stage::Result;
-    Stage::Result result{Status::Unspecified};
-
-    for (size_t i = 0; i < stages.size(); ++i) {
-        result = stages[i]->forward(txn);
-        if (result == Status::UnwindNeeded) {
-            return {result, i};
-        }
-    }
-    return {result, stages.size() - 1};
-}
-
-// stage-loop, unwinding phase
-Stage::Result unwind(std::vector<Stage*> stages, BlockNum unwind_point, LastStage last_stage, db::RWTxn& txn) {
-    using Status = Stage::Result;
-    Stage::Result result{Status::Unspecified};
-
-    for (size_t i = last_stage; i <= 0; --i) {  // reverse loop
-        result = stages[i]->unwind(txn, unwind_point);
-        if (result == Status::Error) {
-            break;
-        }
-    }
-
-    return result;
-}
-
-// progress log
-class ProgressLog : public ActiveComponent {
-    std::vector<Stage*> stages_;
-
+class DownloaderLoop final : public Worker {
   public:
-    ProgressLog(std::vector<Stage*>& stages) : stages_(stages) {}
+    explicit DownloaderLoop(NodeSettings* node_settings, SentryClientSettings* sentry_client_settings, mdbx::env* chaindata_env)
+        : Worker("Downloader"),
+          node_settings_{node_settings},
+          sentry_client_settings_{sentry_client_settings},
+          chaindata_env_{chaindata_env} {};
+    ~DownloaderLoop() override = default;
 
-    void execution_loop() override {  // this is only a trick to avoid using asio timers, this is only test code
-        using namespace std::chrono;
-        log::set_thread_name("progress-log  ");
-        while (!is_stopping()) {
-            std::this_thread::sleep_for(30s);
-            for (auto stage : stages_) {
-                auto progress = stage->get_log_progress();
-                log::Message(stage->name(), progress);
+    void stop(bool wait = false) final {
+        stop_stages();
+        Worker::stop(wait);
+    };
+
+  private:
+    NodeSettings* node_settings_;
+    SentryClientSettings* sentry_client_settings_;
+    mdbx::env* chaindata_env_;
+
+    std::unique_ptr<SentryClient> sentry_client_{nullptr};
+    std::unique_ptr<BlockExchange> block_exchange_{nullptr};
+
+    std::unique_ptr<std::thread> sentry_messages_thread_{nullptr};
+    std::unique_ptr<std::thread> sentry_stats_thread_{nullptr};
+    std::unique_ptr<std::thread> blocks_download_thread_{nullptr};
+
+    std::map<const char*, std::unique_ptr<Stage>> stages_;
+    std::map<const char*, std::unique_ptr<Stage>>::iterator current_stage_;
+    std::vector<const char*> stages_forward_order_;
+    std::vector<const char*> stages_unwind_order_;
+    std::atomic<size_t> current_stages_count_{0};
+    std::atomic<size_t> current_stage_number_{0};
+
+    // Main DownloaderLoop work
+    void work() final {
+        Timer log_timer(
+            node_settings_->asio_context, node_settings_->sync_loop_log_interval_seconds * 1'000,
+            [&]() -> bool {
+                if (is_stopping()) {
+                    log::Info(get_log_prefix()) << "stopping ...";
+                    return false;
+                }
+                log::Info(get_log_prefix(), current_stage_->second->get_log_progress());
+                return true;
+            },
+            true);
+
+        Stage::Status shared_status{/*first_sync=*/true};
+        Hash head_hash;
+        intx::uint256 head_td;
+        BlockNum head_height;
+
+        try {
+            // Open a temporary transaction to see if we have an uncompleted Unwind from previous
+            // runs.
+            {
+                auto txn{chaindata_env_->start_read()};
+                db::Cursor source(txn, db::table::kSyncStageProgress);
+                mdbx::slice key(db::stages::kUnwindKey);
+                auto data{source.find(key, /*throw_notfound=*/false)};
+                if (data && data.value.size() == sizeof(BlockNum))
+                    shared_status.unwind_point.emplace(endian::load_big_u64(db::from_slice(data.value).data()));
             }
+
+            {
+                // Destroy class after usage
+                HeaderRetrieval headers_retrieval(db::ROAccess{*chaindata_env_});
+                std::tie(head_hash, head_td) = headers_retrieval.head_hash_and_total_difficulty();
+                head_height = headers_retrieval.head_height();
+            }
+
+            log::Info("Downloader") << "Started";
+            log::Message("Chain head", {"hash", head_hash.to_hex(),
+                                        "td", intx::to_string(head_td),
+                                        "height", std::to_string(head_height)});
+
+            sentry_client_ = std::make_unique<SentryClient>(sentry_client_settings_->api_addr);
+            sentry_client_->set_status(head_hash, head_td, sentry_client_settings_->chain_identity.value());
+            sentry_client_->hand_shake();
+
+            sentry_messages_thread_ = std::make_unique<std::thread>([&]() -> void {
+                log::set_thread_name("sentry receive");
+                try {
+                    sentry_client_->execution_loop();
+                } catch (std::exception& e) {
+                    log::Error("sentry_messages_thread_", {"exception", typeid(e).name()}) << e.what();
+                } catch (...) {
+                    log::Error("sentry_messages_thread_", {"exception", "undefined"});
+                }
+            });
+
+            sentry_stats_thread_ = std::make_unique<std::thread>([&]() -> void {
+                log::set_thread_name("sentry stats");
+                try {
+                    sentry_client_->stats_receiving_loop();
+                } catch (std::exception& e) {
+                    log::Error("sentry_stats_thread_", {"exception", typeid(e).name()}) << e.what();
+                } catch (...) {
+                    log::Error("sentry_stats_thread_", {"exception", "undefined"});
+                }
+            });
+
+            log::Trace("BlockExchange ctor");
+            db::ROAccess bx_db_access(*chaindata_env_);
+            block_exchange_ = std::make_unique<BlockExchange>(*sentry_client_,
+                                                              bx_db_access,
+                                                              sentry_client_settings_->chain_identity.value());
+
+            log::Trace("BlockExchange thread");
+            blocks_download_thread_ = std::make_unique<std::thread>([&]() -> void {
+                log::set_thread_name("block xchange");
+                try {
+                    block_exchange_->execution_loop();
+                } catch (std::exception& e) {
+                    log::Error("blocks_download_thread_", {"exception", typeid(e).name()}) << e.what();
+                } catch (...) {
+                    log::Error("blocks_download_thread_", {"exception", "undefined"});
+                }
+            });
+
+            log::Trace("Init stages");
+            // Init stages plus forward and unwind order
+            stages_.emplace(db::stages::kHeadersKey, std::make_unique<HeadersStage>(shared_status, *block_exchange_, node_settings_));
+            stages_.emplace(db::stages::kBlockBodiesKey, std::make_unique<BodiesStage>(shared_status, *block_exchange_, node_settings_));
+            stages_forward_order_.insert(stages_forward_order_.begin(),
+                                         {
+                                             db::stages::kHeadersKey,
+                                             db::stages::kBlockBodiesKey,
+                                         });
+            stages_unwind_order_.insert(stages_unwind_order_.begin(),
+                                        {
+                                            db::stages::kBlockBodiesKey,
+                                            db::stages::kHeadersKey,
+                                        });
+
+            // Begin
+            while (!is_stopping()) {
+                db::RWTxn cycle_txn{*chaindata_env_};
+
+                // Run forward
+                if (shared_status.unwind_point.has_value() == false) {
+                    bool should_end_loop{false};
+                    const auto forward_result{run_cycle(cycle_txn, log_timer)};
+                    switch (forward_result) {
+                        case Stage::Result::UnwindNeeded:
+                            SILKWORM_ASSERT(shared_status.unwind_point.has_value());
+                            break;
+                        case Stage::Result::Error:
+                            should_end_loop = true;
+                            break;
+                        default:
+                            break;
+                    }
+                    if (should_end_loop) break;
+                }
+
+                // Run unwind if required
+                if (shared_status.unwind_point.has_value()) {
+                    // Need to persist unwind point (in case of user stop)
+                    db::stages::write_stage_progress(*cycle_txn, db::stages::kUnwindKey, shared_status.unwind_point.value());
+                    cycle_txn.commit(/*renew=*/true);
+
+                    log::Warning("Unwinding", {"to", std::to_string(shared_status.unwind_point.value())});
+                    const auto unwind_result{run_cycle(cycle_txn, log_timer, /*forward**/ false)};
+                    bool should_end_loop{false};
+                    switch (unwind_result) {
+                        case Stage::Result::Error:
+                            should_end_loop = true;
+                            break;
+                        default:
+                            break;
+                    };
+                    if (should_end_loop) break;
+
+                    // Erase unwind key from progress table
+                    db::Cursor progress_table(*cycle_txn, db::table::kSyncStageProgress);
+                    mdbx::slice key(db::stages::kUnwindKey);
+                    (void)progress_table.erase(key);
+                    cycle_txn.commit();
+
+                    // Clear context
+                    shared_status.unwind_point.reset();
+                    shared_status.bad_block_hash.reset();
+                }
+
+                shared_status.first_sync = false;
+            }
+
+        } catch (const mdbx::exception& ex) {
+            log::Error(name_,
+                       {"function", std::string(__FUNCTION__), "exception", std::string(ex.what())});
+        } catch (const std::exception& ex) {
+            log::Error(name_,
+                       {"function", std::string(__FUNCTION__), "exception", std::string(ex.what())});
+        } catch (...) {
+            log::Error(name_,
+                       {"function", std::string(__FUNCTION__), "exception", "undefined"});
+        }
+
+        stop_stages();
+
+        if (block_exchange_) {
+            block_exchange_->stop();
+            if (blocks_download_thread_) blocks_download_thread_->join();
+        }
+
+        if (sentry_client_) {
+            sentry_client_->stop();
+            if (sentry_messages_thread_) sentry_messages_thread_->join();
+            if (sentry_stats_thread_) sentry_stats_thread_->join();
+        }
+
+        sentry_messages_thread_.reset();
+        sentry_stats_thread_.reset();
+        blocks_download_thread_.reset();
+
+        block_exchange_.reset();
+        sentry_client_.reset();
+
+        log_timer.stop();
+        log::Info("Downloader") << "Ended";
+    }
+
+    std::string get_log_prefix() const {
+        static const std::string log_prefix_fmt{"[%u/%u %s]"};
+        return boost::str(boost::format(log_prefix_fmt) %
+                          current_stage_number_ %
+                          current_stages_count_ %
+                          current_stage_->first);
+    }
+
+    void stop_stages() {
+        for (const auto& [_, stage] : stages_) {
+            if (!stage->is_stopping()) {
+                stage->stop();
+            }
+        }
+    }
+
+    Stage::Result run_cycle(db::RWTxn& cycle_txn, Timer& log_timer, bool forward = true) {
+        Stage::Result ret{Stage::Result::Done};
+        StopWatch stages_stop_watch(true);
+
+        try {
+            auto& stages_order{forward ? stages_forward_order_ : stages_unwind_order_};
+            current_stages_count_ = stages_order.size();
+            current_stage_number_ = 0;
+            for (auto& stage_id : stages_order) {
+                if (is_stopping()) {
+                    return Stage::Result::Error;
+                }
+                current_stage_ = stages_.find(stage_id);
+                if (current_stage_ == stages_.end()) {
+                    // Should not happen
+                    throw std::runtime_error("Stage " + std::string(stage_id) + " requested but not implemented");
+                }
+                ++current_stage_number_;
+                current_stage_->second->set_log_prefix(get_log_prefix());
+                log_timer.reset();  // Resets the interval for next log line from now
+                if (forward) {
+                    ret = current_stage_->second->forward(cycle_txn);
+                } else {
+                    ret = current_stage_->second->unwind(cycle_txn);
+                }
+
+                if (static_cast<int>(ret) > 2) {
+                    return ret;
+                }
+
+                auto [_, stage_duration] = stages_stop_watch.lap();
+                if (stage_duration > std::chrono::milliseconds(10)) {
+                    log::Info(get_log_prefix(),
+                              {"op", (forward ? "Forward" : "Unwind"),
+                               "done", StopWatch::format(stage_duration)});
+                }
+            }
+
+            return is_stopping() ? Stage::Result::Error : ret;
+
+        } catch (const std::exception& ex) {
+            log::Error(get_log_prefix(), {"exception", std::string(ex.what())});
+            return Stage::Result::Error;
         }
     }
 };
@@ -95,44 +334,22 @@ int main(int argc, char* argv[]) {
     int return_value = 0;
 
     try {
+        SignalHandler::init();
         NodeSettings node_settings{};
-        node_settings.sentry_api_addr = "127.0.0.1:9091";
-
+        SentryClientSettings sentry_client_settings{};
         log::Settings log_settings;
-        log_settings.log_threads = true;
-        log_settings.log_file = "downloader.log";
-        log_settings.log_verbosity = log::Level::kInfo;
-        log_settings.log_thousands_sep = '\'';
-        log::set_thread_name("main          ");
-
-        // test & measurement only parameters [to remove]
-        BodySequence::kMaxBlocksPerMessage = 128;
-        BodySequence::kPerPeerMaxOutstandingRequests = 4;
-        int requestDeadlineSeconds = 30;     // BodySequence::kRequestDeadline = std::chrono::seconds(30);
-        int noPeerDelayMilliseconds = 1000;  // BodySequence::kNoPeerDelay = std::chrono::milliseconds(1000)
-
-        app.add_option("--max_blocks_per_req", BodySequence::kMaxBlocksPerMessage,
-                       "Max number of blocks requested to peers in a single request")
-            ->capture_default_str();
-        app.add_option("--max_requests_per_peer", BodySequence::kPerPeerMaxOutstandingRequests,
-                       "Max number of pending request made to each peer")
-            ->capture_default_str();
-        app.add_option("--request_deadline_s", requestDeadlineSeconds,
-                       "Time (secs) after which a response is considered lost and will be re-tried")
-            ->capture_default_str();
-        app.add_option("--no_peer_delay_ms", noPeerDelayMilliseconds,
-                       "Time (msecs) to wait before making a new request when no peer accepted the last")
-            ->capture_default_str();
-
-        BodySequence::kRequestDeadline = std::chrono::seconds(requestDeadlineSeconds);
-        BodySequence::kNoPeerDelay = std::chrono::milliseconds(noPeerDelayMilliseconds);
-        // test & measurement only parameters end
 
         // Command line parsing
-        cmd::parse_silkworm_command_line(app, argc, argv, log_settings, node_settings);
+        cmd::parse_silkworm_command_line(app, argc, argv, log_settings, node_settings, sentry_client_settings);
+
+        // Apply values after parsing
+        BodySequence::kMaxBlocksPerMessage = sentry_client_settings.max_blocks_per_request;
+        BodySequence::kPerPeerMaxOutstandingRequests = sentry_client_settings.max_peer_outstanding_requests;
+        BodySequence::kRequestDeadline = std::chrono::seconds(sentry_client_settings.stale_request_timeout_seconds);
+        BodySequence::kNoPeerDelay = std::chrono::seconds(sentry_client_settings.no_peer_timeout_seconds);
 
         log::init(log_settings);
-        log::set_thread_name("stage-loop    ");
+        log::set_thread_name("main");
 
         // Output BuildInfo
         auto build_info{silkworm_get_buildinfo()};
@@ -140,118 +357,45 @@ int main(int argc, char* argv[]) {
                                              "build", std::string(build_info->system_name) + "-" + std::string(build_info->system_processor) + " " + std::string(build_info->build_type),
                                              "compiler", std::string(build_info->compiler_id) + " " + std::string(build_info->compiler_version)});
 
-        log::Message("BlockExchange parameter", {"--max_blocks_per_req", to_string(BodySequence::kMaxBlocksPerMessage)});
-        log::Message("BlockExchange parameter", {"--max_requests_per_peer", to_string(BodySequence::kPerPeerMaxOutstandingRequests)});
-        log::Message("BlockExchange parameter", {"--request_deadline_s", to_string(requestDeadlineSeconds)});
-        log::Message("BlockExchange parameter", {"--no_peer_delay_ms", to_string(noPeerDelayMilliseconds)});
-
         // Prepare database
         cmd::run_preflight_checklist(node_settings);
 
         // EIP-2124 based chain identity scheme (networkId + genesis + forks)
-        ChainIdentity chain_identity;
-        if (node_settings.chain_config->chain_id == kMainnetConfig.chain_id) {
-            chain_identity = kMainnetIdentity;
-        } else if (node_settings.chain_config->chain_id == kRopstenConfig.chain_id) {
-            chain_identity = kRopstenIdentity;
-        } else if (node_settings.chain_config->chain_id == kSepoliaConfig.chain_id) {
-            chain_identity = kSepoliaIdentity;
-        } else {
-            // for Rinkeby & Goerli we have not implemented the consensus engine yet
+        sentry_client_settings.chain_identity = lookup_known_chain_identity(node_settings.chain_config->chain_id);
+        if (!sentry_client_settings.chain_identity.has_value()) {
             throw std::logic_error("Chain id=" + std::to_string(node_settings.chain_config->chain_id) +
                                    " not supported");
         }
 
-        log::Message("Chain/db status", {"chain-id", to_string(chain_identity.config.chain_id)});
-        log::Message("Chain/db status", {"genesis_hash", to_hex(chain_identity.genesis_hash)});
-        log::Message("Chain/db status", {"hard-forks", to_string(chain_identity.distinct_fork_numbers().size())});
+        log::Message("Chain/db status", {"chain-id", to_string(sentry_client_settings.chain_identity->config.chain_id),
+                                         "genesis", to_hex(sentry_client_settings.chain_identity->genesis_hash),
+                                         "hard_forks", to_string(sentry_client_settings.chain_identity->distinct_fork_numbers().size())});
 
-        // Database access
-        // node_settings.chaindata_env_config.readonly = false;
-        // node_settings.chaindata_env_config.shared = true;
-        // node_settings.chaindata_env_config.growth_size = 10_Tebi;
-        mdbx::env_managed db = db::open_env(node_settings.chaindata_env_config);
+        // Start boost asio
+        using asio_guard_type = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
+        auto asio_guard = std::make_unique<asio_guard_type>(node_settings.asio_context.get_executor());
+        std::thread asio_thread{[&node_settings]() -> void {
+            log::set_thread_name("asio");
+            log::Trace("Boost Asio", {"state", "started"});
+            node_settings.asio_context.run();
+            log::Trace("Boost Asio", {"state", "stopped"});
+        }};
 
-        // Node current status
-        HeaderRetrieval headers(db::ROAccess{db});
-        auto [head_hash, head_td] = headers.head_hash_and_total_difficulty();
-        auto head_height = headers.head_height();
-
-        log::Message("Chain/db status", {"head hash", head_hash.to_hex()});
-        log::Message("Chain/db status", {"head td", intx::to_string(head_td)});
-        log::Message("Chain/db status", {"head height", to_string(head_height)});
-
-        // Sentry client - connects to sentry
-        SentryClient sentry{node_settings.sentry_api_addr};
-        sentry.set_status(head_hash, head_td, chain_identity);
-        sentry.hand_shake();
-        auto message_receiving = std::thread([&sentry]() { sentry.execution_loop(); });
-        auto stats_receiving = std::thread([&sentry]() { sentry.stats_receiving_loop(); });
-
-        // BlockExchange - download headers and bodies from remote peers using the sentry
-        BlockExchange block_exchange{sentry, db::ROAccess{db}, chain_identity};
-        auto block_downloading = std::thread([&block_exchange]() { block_exchange.execution_loop(); });
-
-        // Stages shared state
-        Stage::Status shared_status;
-        shared_status.first_sync = true;  // = starting up silkworm
-        db::RWAccess db_access(db);
-
-        // Stages 1 & 2 - Headers and bodies downloading - example code
-        HeadersStage header_stage{shared_status, block_exchange, &node_settings};
-        BodiesStage body_stage{shared_status, block_exchange, &node_settings};
-
-        // Trap os signals
-        SignalHandler::init();
-        //        SignalHandler::init([&](int) {
-        //            log::Info() << "Requesting threads termination\n";
-        //            header_stage.stop();
-        //            body_stage.stop();
-        //            block_exchange.stop();
-        //            sentry.stop();
-        //        });
-
-        // Sample stage loop with 2 stages
-        std::vector<Stage*> stages = {&header_stage, &body_stage};
-
-        ProgressLog progress_log(stages);
-        auto progress_displaying = std::thread([&progress_log]() {
-            progress_log.execution_loop();
-        });
-
-        Stage::Result result{Stage::Result::Unspecified};
-        size_t last_stage = 0;
-
-        do {
-            db::RWTxn txn = db_access.start_rw_tx();
-
-            std::tie(result, last_stage) = forward(stages, txn);
-
-            if (result == Stage::Result::UnwindNeeded) {
-                result = unwind(stages, *(shared_status.unwind_point), last_stage, txn);
+        mdbx::env_managed env{db::open_env(node_settings.chaindata_env_config)};
+        DownloaderLoop downloader_loop(&node_settings, &sentry_client_settings, &env);
+        downloader_loop.start(/*wait=*/false);
+        while (downloader_loop.get_state() != Worker::State::kStopped) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            if (SignalHandler::signalled()) {
+                downloader_loop.stop(true);
             }
+        }
 
-            shared_status.first_sync = false;
-        } while (result != Stage::Result::Error && !SignalHandler::signalled());
+        asio_guard.reset();
+        asio_thread.join();
 
-        log::Info() << "Downloader stage-loop ended\n";
-
-        // Signal exiting
-        progress_log.stop();
-        header_stage.stop();
-        body_stage.stop();
-        block_exchange.stop();
-        // Wait threads termination
-        log::Info() << "Waiting threads termination\n";
-        progress_displaying.join();
-        block_downloading.join();
-        message_receiving.join();
-        stats_receiving.join();
-
-        log::Info() << "Closing db\n";
-        db.close();
-
-        log::Info() << "Downloader terminated\n";
+        log::Message() << "Closing Database chaindata path " << node_settings.data_directory->chaindata().path();
+        env.close();
 
     } catch (const CLI::ParseError& ex) {
         return_value = app.exit(ex);

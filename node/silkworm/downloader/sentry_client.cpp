@@ -37,7 +37,7 @@ SentryClient::SentryClient(const std::string& sentry_addr)
     : base_t(create_custom_channel(sentry_addr)),
       message_subscription_(rpc::ReceiveMessages::Scope::BlockAnnouncements |
                             rpc::ReceiveMessages::Scope::BlockRequests) {
-    log::Info() << "SentryClient, connecting to remote sentry...";
+    log::Info() << "SentryClient, connecting to remote sentry " << sentry_addr << " ...";
 }
 
 rpc::ReceiveMessages::Scope SentryClient::scope(const sentry::InboundMessage& message) {
@@ -88,8 +88,6 @@ void SentryClient::hand_shake() {
 }
 
 void SentryClient::execution_loop() {
-    log::set_thread_name("sentry-recv   ");
-
     try {
         // send a message subscription
         // rpc::ReceiveMessages message_subscription(Scope::BlockAnnouncements | Scope::BlockRequests);
@@ -115,8 +113,6 @@ void SentryClient::execution_loop() {
 }
 
 void SentryClient::stats_receiving_loop() {
-    log::set_thread_name("sentry-stats  ");
-
     try {
         // send a stats subscription
         // rpc::ReceivePeerStats receive_peer_stats;

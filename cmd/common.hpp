@@ -29,7 +29,7 @@ namespace silkworm::cmd {
 //! \brief Parses command line arguments for silkworm executable
 //! \remark This implements the set of CLI args for silkworm executable ONLY !
 void parse_silkworm_command_line(CLI::App& cli, int argc, char* argv[], log::Settings& log_settings,
-                                 NodeSettings& node_settings);
+                                 NodeSettings& node_settings, SentryClientSettings sentry_client_settings);
 
 //! \brief Ensures database is ready for take off and consistent with command line arguments
 void run_preflight_checklist(NodeSettings& node_settings);

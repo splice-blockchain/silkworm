@@ -26,6 +26,7 @@
 #include <boost/asio/io_context.hpp>
 
 #include <silkworm/chain/config.hpp>
+#include <silkworm/chain/identity.hpp>
 #include <silkworm/common/base.hpp>
 #include <silkworm/common/directories.hpp>
 #include <silkworm/db/mdbx.hpp>
@@ -49,6 +50,16 @@ struct NodeSettings {
     std::unique_ptr<db::PruneMode> prune_mode;             // Prune mode
     uint32_t sync_loop_throttle_seconds{0};                // Minimum interval amongst sync cycle
     uint32_t sync_loop_log_interval_seconds{30};           // Interval for sync loop to emit logs
+};
+
+struct SentryClientSettings {
+    std::string api_addr{"127.0.0.1:9091"};       // Default address(es) of sentry
+    uint32_t max_blocks_per_request{128};         // Max number of blocks per single request
+    uint32_t max_peer_outstanding_requests{4};    // Max number of unanswered requests per peer
+    uint32_t stale_request_timeout_seconds{20};   // Number of seconds after which an unanswered request is stale
+    uint32_t no_peer_timeout_seconds{1};          // Number of seconds to wait before resubmitting a request which
+                                                  // no peer accepted
+    std::optional<ChainIdentity> chain_identity;  // To signal peers which chain we're on
 };
 
 }  // namespace silkworm

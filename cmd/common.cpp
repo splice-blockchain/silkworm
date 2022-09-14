@@ -122,7 +122,7 @@ void add_option_wait_mode(CLI::App& cli, silkworm::rpc::WaitMode& wait_mode) {
 }
 
 void parse_silkworm_command_line(CLI::App& cli, int argc, char* argv[], log::Settings& log_settings,
-                                 NodeSettings& node_settings) {
+                                 NodeSettings& node_settings, SentryClientSettings sentry_client_settings) {
     // Node settings
     std::filesystem::path data_dir_path;
     std::string chaindata_max_size_str{human_size(node_settings.chaindata_env_config.max_size)};
@@ -163,18 +163,44 @@ void parse_silkworm_command_line(CLI::App& cli, int argc, char* argv[], log::Set
         ->capture_default_str()
         ->check(IPEndPointValidator(/*allow_empty=*/false));
 
+    // Sentry settings
     cli.add_option("--sentry.api.addr", node_settings.sentry_api_addr, "Sentry api endpoint")
         ->capture_default_str()
         ->check(IPEndPointValidator(/*allow_empty=*/true));
 
+    cli.add_option("--sentry.server.addr", sentry_client_settings.api_addr, "External sentry api endpoint")
+        ->capture_default_str()
+        ->check(IPEndPointValidator(/*allow_empty=*/true));
+
+    cli.add_option("--sentry.request.blocks", sentry_client_settings.max_blocks_per_request,
+                   "Max number of blocks to query in a single request")
+        ->capture_default_str()
+        ->check(CLI::Range(1u, 512u));
+
+    cli.add_option("--sentry.peer.outstanding.requests", sentry_client_settings.max_peer_outstanding_requests,
+                   "Max number of outstanding request for each peer")
+        ->capture_default_str()
+        ->check(CLI::Range(1u, 512u));
+
+    cli.add_option("--sentry.request.timeout", sentry_client_settings.stale_request_timeout_seconds,
+                   "Timeout (in seconds) for an unanswered request to become stale")
+        ->capture_default_str()
+        ->check(CLI::Range(5u, 120u));
+
+    cli.add_option("--sentry.nopeer.timeout", sentry_client_settings.no_peer_timeout_seconds,
+                   "Timeout (in seconds) for an issued request has not been accepted by any peer")
+        ->capture_default_str()
+        ->check(CLI::Range(1u, 120u));
+
     cli.add_option("--sync.loop.throttle", node_settings.sync_loop_throttle_seconds,
-                   "Sets the minimum time between sync loop starts (in seconds)")
-        ->capture_default_str();
+                   "Sets the minimum delay between sync loop starts (in seconds)")
+        ->capture_default_str()
+        ->check(CLI::Range(1u, 7200u));
 
     cli.add_option("--sync.loop.log.interval", node_settings.sync_loop_log_interval_seconds,
-                   "Sets the minimum time between sync loop logs (in seconds)")
+                   "Sets the interval between sync loop logs (in seconds)")
         ->capture_default_str()
-        ->check(CLI::Range(5u, 600u));
+        ->check(CLI::Range(10u, 600u));
 
     cli.add_flag("--fakepow", node_settings.fake_pow, "Disables proof-of-work verification");
     // Chain options

@@ -18,8 +18,6 @@
 
 #include <atomic>
 
-#include <silkworm/concurrency/signal_handler.hpp>
-
 namespace silkworm {
 
 //! \brief Components implementing stoppability should derive from this
@@ -33,7 +31,7 @@ class Stoppable {
     }
 
     //! \brief Whether a stop request has been issued
-    [[nodiscard]] bool is_stopping() { return stopping_.load() || SignalHandler::signalled(); }
+    [[nodiscard]] bool is_stopping() { return stopping_.load(); }
 
     virtual ~Stoppable() = default;
 

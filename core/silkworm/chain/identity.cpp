@@ -16,6 +16,8 @@
 
 #include "identity.hpp"
 
+#include <silkworm/chain/config.hpp>
+
 namespace silkworm {
 
 // TODO (Andrew) what about terminal total difficulty?
@@ -47,4 +49,20 @@ std::vector<BlockNum> ChainIdentity::distinct_fork_numbers() const {
     return forks;
 }
 
+std::optional<ChainIdentity> lookup_known_chain_identity(uint64_t chain_id) {
+    switch (chain_id) {
+        case kMainnetConfig.chain_id:
+            return kMainnetIdentity;
+        case kRopstenConfig.chain_id:
+            return kRopstenIdentity;
+        case kRinkebyConfig.chain_id:
+            return kRinkebyIdentity;
+        case kGoerliConfig.chain_id:
+            return kGoerliIdentity;
+        case kSepoliaConfig.chain_id:
+            return kSepoliaIdentity;
+        default:
+            return std::nullopt;
+    }
+}
 }  // namespace silkworm

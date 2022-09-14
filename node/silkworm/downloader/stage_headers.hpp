@@ -20,6 +20,7 @@
 #include <silkworm/chain/identity.hpp>
 #include <silkworm/common/measure.hpp>
 #include <silkworm/db/access_layer.hpp>
+#include <silkworm/db/stages.hpp>
 #include <silkworm/downloader/internals/types.hpp>
 #include <silkworm/downloader/messages/internal_message.hpp>
 
@@ -63,15 +64,17 @@ namespace silkworm {
  *  used in the other thread and also do not need lock protection.
  *
  */
-class HeadersStage : public Stage {
+class HeadersStage final : public Stage {
   public:
-    HeadersStage(Status&, BlockExchange&, NodeSettings*);
+    HeadersStage(Status& status, BlockExchange& block_downloader, NodeSettings* node_settings)
+        : Stage(db::stages::kHeadersKey, status, node_settings), block_downloader_(block_downloader){};
+
     HeadersStage(const HeadersStage&) = delete;  // not copyable
     HeadersStage(HeadersStage&&) = delete;       // nor movable
-    ~HeadersStage();
+    ~HeadersStage() final = default;
 
-    Stage::Result forward(db::RWTxn&) override;                      // go forward, downloading headers
-    Stage::Result unwind(db::RWTxn&, BlockNum new_height) override;  // go backward, unwinding headers to new_height
+    Stage::Result forward(db::RWTxn&) override;  // go forward, downloading headers
+    Stage::Result unwind(db::RWTxn&) override;   // go backward, unwinding headers to new_height
     Stage::Result prune(db::RWTxn&) override;
 
   private:

@@ -16,9 +16,6 @@
 
 #include "body_persistence.hpp"
 
-#include <algorithm>
-#include <iostream>
-
 #include <catch2/catch.hpp>
 
 #include <silkworm/chain/genesis.hpp>

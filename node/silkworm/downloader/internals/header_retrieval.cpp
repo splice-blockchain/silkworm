@@ -21,23 +21,22 @@
 
 namespace silkworm {
 
-HeaderRetrieval::HeaderRetrieval(db::ROAccess db_access) : db_tx_{db_access.start_ro_tx()} {}
-
 std::vector<BlockHeader> HeaderRetrieval::recover_by_hash(Hash origin, uint64_t amount, uint64_t skip, bool reverse) {
     using std::optional;
     uint64_t max_non_canonical = 100;
 
     std::vector<BlockHeader> headers;
-    long long bytes = 0;
+    size_t accrued_bytes{0};
     Hash hash = origin;
-    bool unknown = false;
+    bool unknown {false};
+
 
     // first
     optional<BlockHeader> header = read_header(db_tx_, hash.bytes);
     if (!header) return headers;
     BlockNum block_num = header->number;
     headers.push_back(*header);
-    bytes += est_header_rlp_size;
+    accrued_bytes += kEstimateHeaderRlpSize;
 
     // followings
     do {
@@ -78,9 +77,9 @@ std::vector<BlockHeader> HeaderRetrieval::recover_by_hash(Hash origin, uint64_t 
         header = read_header(db_tx_, block_num, hash);
         if (!header) break;
         headers.push_back(*header);
-        bytes += est_header_rlp_size;
+        accrued_bytes += kEstimateHeaderRlpSize;
 
-    } while (headers.size() < amount && bytes < soft_response_limit && headers.size() < max_headers_serve);
+    } while (headers.size() < amount && accrued_bytes < kSoftResponseLimit && headers.size() < kHardResponseLimit);
 
     return headers;
 }
@@ -98,15 +97,15 @@ std::vector<BlockHeader> HeaderRetrieval::recover_by_number(BlockNum origin, uin
         if (!header) break;
 
         headers.push_back(*header);
-        bytes += est_header_rlp_size;
+        bytes += kEstimateHeaderRlpSize;
 
         if (!reverse)
             block_num += skip + 1;  // Number based traversal towards the leaf block
         else
             block_num -= skip + 1;  // Number based traversal towards the genesis block
 
-    } while (block_num > 0 && headers.size() < amount && bytes < soft_response_limit &&
-             headers.size() < max_headers_serve);
+    } while (block_num > 0 && headers.size() < amount && bytes < kSoftResponseLimit &&
+             headers.size() < kHardResponseLimit);
 
     return headers;
 }
