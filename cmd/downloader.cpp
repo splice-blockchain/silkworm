@@ -76,7 +76,7 @@ class DownloaderLoop final : public Worker {
         Timer log_timer(
             node_settings_->asio_context, node_settings_->sync_loop_log_interval_seconds * 1'000,
             [&]() -> bool {
-                if (is_stopping()) {
+                if (!is_running()) {
                     log::Info(get_log_prefix()) << "stopping ...";
                     return false;
                 }
@@ -174,7 +174,7 @@ class DownloaderLoop final : public Worker {
                                         });
 
             // Begin
-            while (!is_stopping()) {
+            while (is_running()) {
                 db::RWTxn cycle_txn{*chaindata_env_};
 
                 // Run forward
@@ -286,9 +286,7 @@ class DownloaderLoop final : public Worker {
             current_stages_count_ = stages_order.size();
             current_stage_number_ = 0;
             for (auto& stage_id : stages_order) {
-                if (is_stopping()) {
-                    return Stage::Result::Error;
-                }
+                if (!is_running()) return Stage::Result::Error;
                 current_stage_ = stages_.find(stage_id);
                 if (current_stage_ == stages_.end()) {
                     // Should not happen
@@ -315,7 +313,7 @@ class DownloaderLoop final : public Worker {
                 }
             }
 
-            return is_stopping() ? Stage::Result::Error : ret;
+            return is_running() ? ret : Stage::Result::Error;
 
         } catch (const std::exception& ex) {
             log::Error(get_log_prefix(), {"exception", std::string(ex.what())});

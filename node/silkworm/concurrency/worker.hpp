@@ -52,8 +52,10 @@ class Worker {
     virtual void stop(bool wait = false);  // Stops worker thread (optionally wait for complete stop)
     void kick();                           // Kicks worker thread if waiting
 
-    //! \brief Whether this worker/thread has received a stop request
-    bool is_stopping() const { return state_.load() == State::kStopping; }
+    //! \brief Whether this worker/thread is properly running
+    //! \remark Should this return false it means either a stop request
+    //! has been issued or some error is causing the thread to abort
+    bool is_running() const { return state_.load() == State::kStarted; }
 
     //! \brief Retrieves current state of thread
     State get_state() { return state_.load(); }

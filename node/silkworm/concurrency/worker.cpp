@@ -42,7 +42,12 @@ void Worker::start(bool wait) {
             try {
                 work();
             } catch (const std::exception& ex) {
-                log::Error(name_, {"exception", std::string(ex.what())});
+                log::Error(name_, {"exception", typeid(ex).name(), "what", std::string(ex.what())});
+                state_.store(State::kStopping);
+                exception_ptr_ = std::current_exception();
+            } catch (...) {
+                state_.store(State::kStopping);
+                log::Error(name_, {"exception", "undefined"});
                 exception_ptr_ = std::current_exception();
             }
         }
@@ -93,7 +98,7 @@ bool Worker::wait_for_kick(uint32_t timeout_milliseconds) {
         expected_kicked_value = true;
     }
 
-    if (is_stopping()) {
+    if (!is_running()) {
         return false;
     }
     state_.store(State::kStarted);

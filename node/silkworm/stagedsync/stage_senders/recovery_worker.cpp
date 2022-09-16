@@ -58,7 +58,7 @@ void RecoveryWorker::work() {
 
         for (auto& package : batch_) {
             // On block switching check stopping
-            if (block_num != package.block_num && is_stopping()) {
+            if (block_num != package.block_num && !is_running()) {
                 throw std::runtime_error("Operation cancelled");
             }
 

@@ -109,7 +109,7 @@ void SyncLoop::work() {
     Timer log_timer(
         node_settings_->asio_context, node_settings_->sync_loop_log_interval_seconds * 1'000,
         [&]() -> bool {
-            if (is_stopping()) {
+            if (!is_running()) {
                 log::Info(get_log_prefix()) << "stopping ...";
                 return false;
             }
@@ -139,7 +139,7 @@ void SyncLoop::work() {
 
         StopWatch cycle_stop_watch;
 
-        while (!is_stopping()) {
+        while (is_running()) {
             cycle_stop_watch.start(/*with_reset=*/true);
 
             bool cycle_in_one_tx{!sync_context_->is_first_cycle};
@@ -287,7 +287,7 @@ StageResult SyncLoop::run_cycle_forward(db::RWTxn& cycle_txn, Timer& log_timer) 
             }
         }
 
-        return is_stopping() ? StageResult::kAborted : StageResult::kSuccess;
+        return is_running() ? StageResult::kSuccess : StageResult::kAborted;
 
     } catch (const std::exception& ex) {
         log::Error(get_log_prefix(), {"exception", std::string(ex.what())});
@@ -326,7 +326,7 @@ StageResult SyncLoop::run_cycle_unwind(db::RWTxn& cycle_txn, Timer& log_timer) {
             }
         }
 
-        return is_stopping() ? StageResult::kAborted : StageResult::kSuccess;
+        return is_running() ? StageResult::kSuccess : StageResult::kAborted;
 
     } catch (const std::exception& ex) {
         log::Error(get_log_prefix(), {"exception", std::string(ex.what())});
@@ -365,7 +365,7 @@ StageResult SyncLoop::run_cycle_prune(db::RWTxn& cycle_txn, Timer& log_timer) {
             }
         }
 
-        return is_stopping() ? StageResult::kAborted : StageResult::kSuccess;
+        return is_running() ? StageResult::kSuccess : StageResult::kAborted;
 
     } catch (const std::exception& ex) {
         log::Error(get_log_prefix(), {"exception", std::string(ex.what())});
@@ -374,7 +374,7 @@ StageResult SyncLoop::run_cycle_prune(db::RWTxn& cycle_txn, Timer& log_timer) {
 }
 
 void SyncLoop::throttle_next_cycle(const StopWatch::Duration& cycle_duration) {
-    if (is_stopping() || !node_settings_->sync_loop_throttle_seconds) {
+    if (!is_running() || !node_settings_->sync_loop_throttle_seconds) {
         return;
     }
 
@@ -388,10 +388,8 @@ void SyncLoop::throttle_next_cycle(const StopWatch::Duration& cycle_duration) {
     log::Info() << "Next cycle starts in " << StopWatch::format(wait_duration);
     auto next_start_time = std::chrono::high_resolution_clock::now() + wait_duration;
     while (std::chrono::high_resolution_clock::now() < next_start_time) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if (is_stopping()) {
-            break;
-        }
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (!is_running()) break;
     }
 }
 std::string SyncLoop::get_log_prefix() const {
