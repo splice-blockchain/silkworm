@@ -72,6 +72,7 @@ size_t get_mem_usage() {
 
 int main(int argc, char* argv[]) {
     using namespace boost::placeholders;
+    using namespace std::chrono_literals;
 
     CLI::App cli("Silkworm node");
     cli.get_formatter()->column_width(50);
@@ -121,34 +122,33 @@ int main(int argc, char* argv[]) {
         std::thread asio_thread{[&node_settings]() -> void {
             log::set_thread_name("Asio");
             log::Trace("Boost Asio", {"state", "started"});
-            node_settings.asio_context.run();
+            (void)node_settings.asio_context.run();
             log::Trace("Boost Asio", {"state", "stopped"});
         }};
 
         // Start sync loop
-        auto start_time{std::chrono::steady_clock::now()};
+        const auto time_of_start{std::chrono::steady_clock::now()};
+        auto time_of_resource_logging{time_of_start + 300s};
         stagedsync::SyncLoop sync_loop(&node_settings, &chaindata_env);
         sync_loop.start(/*wait=*/false);
 
         // Keep waiting till sync_loop stops
         // Signals are handled in sync_loop and below
-        auto t1{std::chrono::steady_clock::now()};
         while (sync_loop.get_state() != Worker::State::kStopped) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
             // Check signals
             if (SignalHandler::signalled()) {
-                sync_loop.stop(true);
+                sync_loop.stop(/*wait=*/true);
                 continue;
             }
 
-            auto t2{std::chrono::steady_clock::now()};
-            if ((t2 - t1) > std::chrono::seconds(300)) {
-                t1 = std::chrono::steady_clock::now();
-                auto total_duration{t1 - start_time};
+            if (const auto time_now{std::chrono::steady_clock::now()}; time_now >= time_of_resource_logging) {
+                const auto total_duration{time_now - time_of_start};
+                time_of_resource_logging = time_now + 300s;  // Next resource usage logging line timing
                 log::Info("Resource usage",
                           {
-                              "mem", human_size(get_mem_usage()),                                     //
+                              "vmem", human_size(get_mem_usage()),                                    //
                               "chain", human_size(node_settings.data_directory->chaindata().size()),  //
                               "etl-tmp", human_size(node_settings.data_directory->etl().size()),      //
                               "uptime", StopWatch::format(total_duration)                             //

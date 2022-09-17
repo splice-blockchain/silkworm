@@ -41,7 +41,10 @@ void Worker::start(bool wait) {
             try {
                 work();
             } catch (const std::exception& ex) {
-                log::Error(name_, {"exception", std::string(ex.what())});
+                log::Error(name_, {"exception", "id", typeid(ex).name(), "what", std::string(ex.what())});
+                exception_ptr_ = std::current_exception();
+            } catch (...) {
+                log::Error(name_, {"exception", "id", "undefined"});
                 exception_ptr_ = std::current_exception();
             }
         }
