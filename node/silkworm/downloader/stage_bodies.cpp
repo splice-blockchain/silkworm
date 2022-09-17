@@ -51,7 +51,9 @@ Stage::Result BodiesStage::forward(db::RWTxn& tx) {
     timing.start();
     log::Info(log_prefix_) << "Start";
 
-    if (block_downloader_.is_stopping()) {
+    // TODO Why check only here ?
+    // What if downloader stops during the below while loop ?
+    if (!block_downloader_.is_running()) {
         log::Error(log_prefix_) << "Aborted, block exchange is down";
         return Stage::Result::Error;
     }
@@ -109,14 +111,14 @@ Stage::Result BodiesStage::forward(db::RWTxn& tx) {
                 height_progress.set(body_persistence.highest_height());
 
                 log::Info(log_prefix_) << "Wrote block bodies number=" << height_progress.get() << " (+"
-                            << height_progress.delta() << "), " << height_progress.throughput() << " bodies/secs";
+                                       << height_progress.delta() << "), " << height_progress.throughput() << " bodies/secs";
             }
         }
 
         auto bodies_downloaded = body_persistence.highest_height() - body_persistence.initial_height();
         log::Info(log_prefix_) << "Downloading completed, wrote " << bodies_downloaded << " bodies,"
-                    << " last=" << body_persistence.highest_height()
-                    << " duration=" << StopWatch::format(timing.lap_duration());
+                               << " last=" << body_persistence.highest_height()
+                               << " duration=" << StopWatch::format(timing.lap_duration());
 
         body_persistence.close();
 

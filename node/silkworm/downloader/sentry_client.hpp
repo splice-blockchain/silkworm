@@ -19,7 +19,7 @@
 #include <p2psentry/sentry.grpc.pb.h>
 
 #include <silkworm/chain/identity.hpp>
-#include <silkworm/concurrency/active_component.hpp>
+#include <silkworm/concurrency/worker.hpp>
 #include <silkworm/downloader/internals/grpc_sync_client.hpp>
 #include <silkworm/downloader/internals/sentry_type_casts.hpp>
 #include <silkworm/downloader/internals/types.hpp>
@@ -33,46 +33,56 @@ namespace silkworm {
  * The remote sentry must implement the ethereum p2p protocol and must have an interface specified by sentry.proto
  * SentryClient uses gRPC/protobuf to communicate with the remote sentry.
  */
-class SentryClient : public rpc::Client<sentry::Sentry>, public ActiveComponent {
+class SentryClient final : public rpc::Client<sentry::Sentry>, public Worker {
   public:
     using base_t = rpc::Client<sentry::Sentry>;
     using subscriber_t = std::function<void(const sentry::InboundMessage&)>;
 
     explicit SentryClient(const std::string& sentry_addr);  // connect to the remote sentry
+
+    // Not copy-able nor move-able
     SentryClient(const SentryClient&) = delete;
     SentryClient(SentryClient&&) = delete;
 
+    void stop(bool wait) final;
+
     void set_status(Hash head_hash, BigInt head_td, const ChainIdentity&);  // init the remote sentry
-    void hand_shake();                                                      // needed by the remote sentry, also check the protocol version
-    uint64_t count_active_peers();                                          // ask the remote sentry for active peers
 
     uint64_t active_peers();  // return cached peers count
 
     using base_t::exec_remotely;  // exec_remotely(SentryRpc& rpc) sends a rpc request to the remote sentry
 
-    void subscribe(rpc::ReceiveMessages::Scope, subscriber_t callback);  // subscribe with sentry to receive messages
-
-    bool stop() override;
-
-    /*[[long_running]]*/ void execution_loop() override;  // do a long-running loop to wait for messages
-    /*[[long_running]]*/ void stats_receiving_loop();     // do a long-running loop to wait for peer statistics
+    //! Register a subscription for messages notifications
+    void register_subscription(rpc::ReceiveMessages::Scope scope, subscriber_t callback);
 
     static rpc::ReceiveMessages::Scope scope(const sentry::InboundMessage& message);  // find the scope of the message
 
   protected:
-    void publish(const sentry::InboundMessage&);  // notifying registered subscribers
+    //! \brief Notify registered subscribers of incoming message
+    void notify_subscribers(const sentry::InboundMessage&);
 
     rpc::ReceiveMessages message_subscription_;
     rpc::ReceivePeerStats receive_peer_stats_;
 
     std::map<rpc::ReceiveMessages::Scope, std::list<subscriber_t>> subscribers_;  // todo: optimize
     std::atomic<uint64_t> active_peers_{0};
+
+  private:
+    std::unique_ptr<std::thread> thread_stats_{nullptr};  // Ancillary thread work for stats receiving
+    std::atomic<Worker::State> thread_stats_state_{Worker::State::kStopped};
+    std::condition_variable thread_stats_cv_;  // To track its start
+    std::mutex thread_stats_mtx_;
+
+    void work() final;                 // Messages receiving loop
+    void work_stats();                 // Stats receiving loop
+    void hand_shake();                 // needed by the remote sentry, also check the protocol version
+    void update_active_peers_count();  // ask the remote sentry for active peers and update local cache
 };
 
 // custom exception
 class SentryClientException : public std::runtime_error {
   public:
-    explicit SentryClientException(const std::string& cause) : std::runtime_error(cause) {}
+    explicit SentryClientException(const std::string& message) : std::runtime_error(message) {}
 };
 
 }  // namespace silkworm

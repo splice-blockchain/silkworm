@@ -38,7 +38,9 @@ auto HeadersStage::forward(db::RWTxn& tx) -> Stage::Result {
     timing.start();
     log::Info(log_prefix_) << "Start";
 
-    if (block_downloader_.is_stopping()) {
+    // TODO Why check only here ?
+    // What if downloader stops during the below while loop ?
+    if (!block_downloader_.is_running()) {
         log::Error(log_prefix_) << "Aborted, block exchange is down";
         return Stage::Result::Error;
     }

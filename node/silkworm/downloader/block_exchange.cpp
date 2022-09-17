@@ -17,18 +17,17 @@
 #include "block_exchange.hpp"
 
 #include <chrono>
-#include <thread>
 
 #include <silkworm/common/log.hpp>
 #include <silkworm/downloader/internals/preverified_hashes.hpp>
 #include <silkworm/downloader/messages/inbound_message.hpp>
-#include <silkworm/downloader/messages/outbound_get_block_bodies.hpp>
 #include <silkworm/downloader/rpc/penalize_peer.hpp>
 
 namespace silkworm {
 
 BlockExchange::BlockExchange(SentryClient& sentry, const db::ROAccess& dba, const ChainIdentity& ci)
-    : db_access_{dba},
+    : Worker("BlockExchange"),
+      db_access_{dba},
       sentry_{sentry},
       chain_identity_{ci},
       preverified_hashes_{PreverifiedHashes::load(ci.config.chain_id)},
@@ -39,47 +38,47 @@ BlockExchange::BlockExchange(SentryClient& sentry, const db::ROAccess& dba, cons
     header_chain_.set_preverified_hashes(&preverified_hashes_);
 }
 
-BlockExchange::~BlockExchange() {
-    stop();
-}
-
 const ChainIdentity& BlockExchange::chain_identity() const { return chain_identity_; }
 
 const PreverifiedHashes& BlockExchange::preverified_hashes() const { return preverified_hashes_; }
 
 SentryClient& BlockExchange::sentry() const { return sentry_; }
 
-void BlockExchange::accept(std::shared_ptr<Message> message) { messages_.push(message); }
+void BlockExchange::accept(std::shared_ptr<Message> message) {
+    if (!is_running()) {
+        throw std::runtime_error("BlockExchange Stopped");
+    }
+    messages_.push(message);
+}
 
-void BlockExchange::receive_message(const sentry::InboundMessage& raw_message) {
+void BlockExchange::process_incoming_message(const sentry::InboundMessage& raw_message) {
     try {
         auto message = InboundMessage::make(raw_message);
-
-        SILK_TRACE << "BlockExchange received message " << *message;
-
         messages_.push(message);
     } catch (rlp::DecodingError& error) {
         PeerId peer_id = bytes_from_H512(raw_message.peer_id());
-        log::Warning() << "BlockExchange received and ignored a malformed message, peer= " << human_readable_id(peer_id)
-                       << ", msg-id= " << raw_message.id() << "/" << sentry::MessageId_Name(raw_message.id())
-                       << " - " << error.what();
+        log::Trace("Ignored malformed message",
+                   {"peer", to_hex(human_readable_id(peer_id)),
+                    "msg-id", sentry::MessageId_Name(raw_message.id()),
+                    "what", error.what()});
         send_penalization(peer_id, BadBlockPenalty);
     }
 }
 
-void BlockExchange::execution_loop() {
+void BlockExchange::work() {
     using namespace std::chrono;
     using namespace std::chrono_literals;
+    static const bool should_trace{log::test_verbosity(log::Level::kTrace)};
 
-    sentry_.subscribe(rpc::ReceiveMessages::Scope::BlockAnnouncements,
-                      [this](const sentry::InboundMessage& msg) { receive_message(msg); });
-    sentry_.subscribe(rpc::ReceiveMessages::Scope::BlockRequests,
-                      [this](const sentry::InboundMessage& msg) { receive_message(msg); });
+    sentry_.register_subscription(rpc::ReceiveMessages::Scope::BlockAnnouncements,
+                                  [this](const sentry::InboundMessage& msg) { process_incoming_message(msg); });
+    sentry_.register_subscription(rpc::ReceiveMessages::Scope::BlockRequests,
+                                  [this](const sentry::InboundMessage& msg) { process_incoming_message(msg); });
 
-    auto constexpr kShortInterval = 1000ms;
-    time_point_t last_update = system_clock::now();
+    auto constexpr kShortInterval{1s};
+    auto next_status_update{std::chrono::steady_clock::now()};
 
-    while (!is_stopping() && !sentry_.is_stopping()) {
+    while (is_running() && sentry_.is_running()) {
         // pop a message from the queue
         std::shared_ptr<Message> message;
         bool present = messages_.timed_wait_and_pop(message, kShortInterval);
@@ -89,13 +88,13 @@ void BlockExchange::execution_loop() {
         message->execute(db_access_, header_chain_, body_sequence_, sentry_);
 
         // log status
-        auto now = system_clock::now();
-        if (silkworm::log::test_verbosity(silkworm::log::Level::kTrace) && now - last_update > 30s) {
-            log_status();
-            last_update = now;
+        if (should_trace) {
+            if (const auto time_now{std::chrono::steady_clock::now()}; time_now >= next_status_update) {
+                log_status();
+                next_status_update = time_now + 30s;
+            }
         }
     }
-    log::Warning() << "BlockExchange execution_loop ended";
 }
 
 void BlockExchange::log_status() {
@@ -120,11 +119,10 @@ void BlockExchange::log_status() {
                  << "; stats: " << body_sequence_.statistics();
 }
 
-void BlockExchange::send_penalization(PeerId id, Penalty p) noexcept {
+void BlockExchange::send_penalization(const PeerId& id, Penalty p) noexcept {
     rpc::PenalizePeer penalize_peer(id, p);
     penalize_peer.do_not_throw_on_failure();
     penalize_peer.timeout(kRpcTimeout);
-
     sentry_.exec_remotely(penalize_peer);
 }
 

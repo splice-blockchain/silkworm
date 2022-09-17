@@ -17,6 +17,7 @@
 #pragma once
 
 #include <silkworm/common/settings.hpp>
+#include <silkworm/concurrency/stoppable.hpp>
 #include <silkworm/downloader/internals/types.hpp>
 
 namespace silkworm {

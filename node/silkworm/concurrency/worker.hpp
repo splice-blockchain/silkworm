@@ -57,6 +57,7 @@ class Worker {
     //! has been issued or some error is causing the thread to abort
     bool is_running() const {
         switch (state_.load()) {
+            case State::kStarting:
             case State::kStarted:
             case State::kKickWaiting:
                 return true;

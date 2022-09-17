@@ -45,7 +45,6 @@ class DownloaderLoop final : public Worker {
           node_settings_{node_settings},
           sentry_client_settings_{sentry_client_settings},
           chaindata_env_{chaindata_env} {};
-    ~DownloaderLoop() override = default;
 
     void stop(bool wait = false) final {
         stop_stages();
@@ -59,10 +58,6 @@ class DownloaderLoop final : public Worker {
 
     std::unique_ptr<SentryClient> sentry_client_{nullptr};
     std::unique_ptr<BlockExchange> block_exchange_{nullptr};
-
-    std::unique_ptr<std::thread> sentry_messages_thread_{nullptr};
-    std::unique_ptr<std::thread> sentry_stats_thread_{nullptr};
-    std::unique_ptr<std::thread> blocks_download_thread_{nullptr};
 
     std::map<const char*, std::unique_ptr<Stage>> stages_;
     std::map<const char*, std::unique_ptr<Stage>>::iterator current_stage_;
@@ -116,47 +111,14 @@ class DownloaderLoop final : public Worker {
 
             sentry_client_ = std::make_unique<SentryClient>(sentry_client_settings_->api_addr);
             sentry_client_->set_status(head_hash, head_td, sentry_client_settings_->chain_identity.value());
-            sentry_client_->hand_shake();
-
-            sentry_messages_thread_ = std::make_unique<std::thread>([&]() -> void {
-                log::set_thread_name("sentry receive");
-                try {
-                    sentry_client_->execution_loop();
-                } catch (std::exception& e) {
-                    log::Error("sentry_messages_thread_", {"exception", typeid(e).name()}) << e.what();
-                } catch (...) {
-                    log::Error("sentry_messages_thread_", {"exception", "undefined"});
-                }
-            });
-
-            sentry_stats_thread_ = std::make_unique<std::thread>([&]() -> void {
-                log::set_thread_name("sentry stats");
-                try {
-                    sentry_client_->stats_receiving_loop();
-                } catch (std::exception& e) {
-                    log::Error("sentry_stats_thread_", {"exception", typeid(e).name()}) << e.what();
-                } catch (...) {
-                    log::Error("sentry_stats_thread_", {"exception", "undefined"});
-                }
-            });
+            sentry_client_->start(/*wait=*/true);
 
             log::Trace("BlockExchange ctor");
             db::ROAccess bx_db_access(*chaindata_env_);
             block_exchange_ = std::make_unique<BlockExchange>(*sentry_client_,
                                                               bx_db_access,
                                                               sentry_client_settings_->chain_identity.value());
-
-            log::Trace("BlockExchange thread");
-            blocks_download_thread_ = std::make_unique<std::thread>([&]() -> void {
-                log::set_thread_name("block xchange");
-                try {
-                    block_exchange_->execution_loop();
-                } catch (std::exception& e) {
-                    log::Error("blocks_download_thread_", {"exception", typeid(e).name()}) << e.what();
-                } catch (...) {
-                    log::Error("blocks_download_thread_", {"exception", "undefined"});
-                }
-            });
+            block_exchange_->start(/*wait=*/true);
 
             log::Trace("Init stages");
             // Init stages plus forward and unwind order
@@ -192,6 +154,7 @@ class DownloaderLoop final : public Worker {
                             break;
                     }
                     if (should_end_loop) break;
+                    continue;
                 }
 
                 // Run unwind if required
@@ -221,6 +184,7 @@ class DownloaderLoop final : public Worker {
                     // Clear context
                     shared_status.unwind_point.reset();
                     shared_status.bad_block_hash.reset();
+                    continue;
                 }
 
                 shared_status.first_sync = false;
@@ -237,23 +201,8 @@ class DownloaderLoop final : public Worker {
                        {"function", std::string(__FUNCTION__), "exception", "undefined"});
         }
 
-        stop_stages();
-
-        if (block_exchange_) {
-            block_exchange_->stop();
-            if (blocks_download_thread_) blocks_download_thread_->join();
-        }
-
-        if (sentry_client_) {
-            sentry_client_->stop();
-            if (sentry_messages_thread_) sentry_messages_thread_->join();
-            if (sentry_stats_thread_) sentry_stats_thread_->join();
-        }
-
-        sentry_messages_thread_.reset();
-        sentry_stats_thread_.reset();
-        blocks_download_thread_.reset();
-
+        if (block_exchange_) block_exchange_->stop(/*wait*/ true);
+        if (sentry_client_) sentry_client_->stop(/*wait*/ true);
         block_exchange_.reset();
         sentry_client_.reset();
 
