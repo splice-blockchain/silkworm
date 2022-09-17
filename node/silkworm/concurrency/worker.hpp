@@ -33,8 +33,8 @@ class Worker {
     enum class State {
         kStopped,
         kStarting,
-        kStarted,
-        kKickWaiting,
+        kStarted,      // running
+        kKickWaiting,  // running
         kStopping
     };
 
@@ -55,7 +55,15 @@ class Worker {
     //! \brief Whether this worker/thread is properly running
     //! \remark Should this return false it means either a stop request
     //! has been issued or some error is causing the thread to abort
-    bool is_running() const { return state_.load() == State::kStarted; }
+    bool is_running() const {
+        switch (state_.load()) {
+            case State::kStarted:
+            case State::kKickWaiting:
+                return true;
+            default:
+                return false;
+        }
+    }
 
     //! \brief Retrieves current state of thread
     State get_state() { return state_.load(); }
