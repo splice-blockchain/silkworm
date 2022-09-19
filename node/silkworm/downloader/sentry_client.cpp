@@ -120,7 +120,7 @@ void SentryClient::work_stats() {
     update_active_peers_count();
 
     // receive stats
-    while (is_running() && stats_subscription_.receive_one_reply()) {
+    while (is_running() && stats_subscription_.receive_one_reply() /* is this blocking ????? */) {
         const sentry::PeerEvent& stat = stats_subscription_.reply();
         const auto peerId = bytes_from_H512(stat.peer_id());
         const char* event = "";
