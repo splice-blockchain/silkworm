@@ -17,6 +17,7 @@
 #include "block_exchange.hpp"
 
 #include <chrono>
+#include <functional>
 
 #include <silkworm/common/log.hpp>
 #include <silkworm/downloader/internals/preverified_hashes.hpp>
@@ -44,17 +45,19 @@ const PreverifiedHashes& BlockExchange::preverified_hashes() const { return prev
 
 SentryClient& BlockExchange::sentry() const { return sentry_; }
 
-void BlockExchange::accept(std::shared_ptr<Message> message) {
-    if (!is_running()) {
-        throw std::runtime_error("BlockExchange Stopped");
-    }
+void BlockExchange::enqueue_outgoing_message(std::shared_ptr<Message> message) {
+    if (!is_running()) return;
     messages_.push(message);
+    kick();  // Signals Worker there's work to do
 }
 
-void BlockExchange::process_incoming_message(const sentry::InboundMessage& raw_message) {
+void BlockExchange::enqueue_incoming_message(const sentry::InboundMessage& raw_message) {
+    if (!is_running()) return;
     try {
         auto message = InboundMessage::make(raw_message);
         messages_.push(message);
+        kick();  // Signals Worker there's work to do
+
     } catch (rlp::DecodingError& error) {
         PeerId peer_id = bytes_from_H512(raw_message.peer_id());
         log::Trace("Ignored malformed message",
@@ -68,33 +71,32 @@ void BlockExchange::process_incoming_message(const sentry::InboundMessage& raw_m
 void BlockExchange::work() {
     using namespace std::chrono;
     using namespace std::chrono_literals;
+    using namespace std::placeholders;
+
     static const bool should_trace{log::test_verbosity(log::Level::kTrace)};
 
-    sentry_.register_subscription(rpc::ReceiveMessages::Scope::BlockAnnouncements,
-                                  [this](const sentry::InboundMessage& msg) { process_incoming_message(msg); });
-    sentry_.register_subscription(rpc::ReceiveMessages::Scope::BlockRequests,
-                                  [this](const sentry::InboundMessage& msg) { process_incoming_message(msg); });
+    incoming_message_subscription_ = sentry_.signal_message_received.connect(std::bind(&BlockExchange::enqueue_incoming_message, this, _1));
 
     auto constexpr kShortInterval{1s};
     auto next_status_update{std::chrono::steady_clock::now()};
 
-    while (is_running() && sentry_.is_running()) {
-        // pop a message from the queue
+    while (wait_for_kick()) {
         std::shared_ptr<Message> message;
-        bool present = messages_.timed_wait_and_pop(message, kShortInterval);
-        if (!present) continue;  // timeout, needed to check exiting_
-
-        // process the message (command pattern)
-        message->execute(db_access_, header_chain_, body_sequence_, sentry_);
-
-        // log status
-        if (should_trace) {
-            if (const auto time_now{std::chrono::steady_clock::now()}; time_now >= next_status_update) {
-                log_status();
-                next_status_update = time_now + 30s;
+        // Consume the whole queue
+        while (messages_.try_pop(message)) {
+            // log status
+            if (should_trace) {
+                if (const auto time_now{std::chrono::steady_clock::now()}; time_now >= next_status_update) {
+                    log_status();
+                    next_status_update = time_now + 30s;
+                }
             }
+            message->execute(db_access_, header_chain_, body_sequence_, sentry_);
         }
     }
+
+    incoming_message_subscription_.disconnect();
+    messages_.clear();
 }
 
 void BlockExchange::log_status() {

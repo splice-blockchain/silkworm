@@ -57,6 +57,12 @@ class ThreadSafeQueue {
         return true;
     }
 
+    void clear() {
+        std::unique_lock lock(mutex_);
+        container<T> empty_queue;
+        std::swap(queue_, empty_queue);
+    }
+
     void wait_and_pop(T& popped_value) {
         std::unique_lock lock(mutex_);
         condition_variable_.wait(lock, [this] { return !queue_.empty(); });

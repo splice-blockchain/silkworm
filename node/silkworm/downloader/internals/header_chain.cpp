@@ -106,9 +106,6 @@ Headers HeaderChain::withdraw_stable_headers() {
     Headers stable_headers;
 
     auto initial_highest_in_db = highest_in_db_;
-    SILK_TRACE << "HeaderChain: finding headers to persist on top of " << highest_in_db_ << " (" << insert_list_.size()
-               << " waiting in queue)";
-
     OldestFirstLinkQueue assessing_list = insert_list_;  // use move() operation if it is assured that after the move
     insert_list_.clear();                                // the container is empty and can be reused
 
@@ -326,10 +323,7 @@ auto HeaderChain::request_more_headers(time_point_t time_point, seconds_t timeou
     -> std::tuple<std::optional<GetBlockHeadersPacket66>, std::vector<PeerPenalization>> {
     using std::nullopt;
 
-    if (anchor_queue_.empty()) {
-        SILK_TRACE << "HeaderChain, no more headers to request: empty anchor queue";
-        return {};
-    }
+    if (anchor_queue_.empty()) return {};
 
     std::vector<PeerPenalization> penalties;
     while (!anchor_queue_.empty()) {

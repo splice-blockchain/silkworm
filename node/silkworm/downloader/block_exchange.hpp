@@ -36,8 +36,7 @@ class BlockExchange final : public Worker {
     BlockExchange(const BlockExchange&) = delete;
     BlockExchange(BlockExchange&&) = delete;
 
-    void accept(std::shared_ptr<Message>); /*[[thread_safe]]*/
-
+    void enqueue_outgoing_message(std::shared_ptr<Message>); /*[[thread_safe]]*/
     const ChainIdentity& chain_identity() const;
     const PreverifiedHashes& preverified_hashes() const;
     SentryClient& sentry() const;
@@ -45,8 +44,8 @@ class BlockExchange final : public Worker {
   private:
     using MessageQueue = ConcurrentQueue<std::shared_ptr<Message>>;  // used internally to store new messages
 
-    void work() final;
-    void process_incoming_message(const sentry::InboundMessage& raw_message);
+    void work() final;  // Main working loop
+    void enqueue_incoming_message(const sentry::InboundMessage& raw_message);
     void send_penalization(const PeerId& id, Penalty p) noexcept;
     void log_status();
 
@@ -59,6 +58,8 @@ class BlockExchange final : public Worker {
     HeaderChain header_chain_;
     BodySequence body_sequence_;
     MessageQueue messages_{};  // thread safe queue where to receive messages from sentry
+
+    boost::signals2::scoped_connection incoming_message_subscription_;
 };
 
 }  // namespace silkworm

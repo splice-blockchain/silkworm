@@ -63,8 +63,8 @@ BlockNum HeaderPersistence::unwind_point() const { return unwind_point_; }
 // Erigon's func (hi *HeaderInserter) FeedHeader
 
 void HeaderPersistence::persist(const Headers& headers) {
-    SILK_TRACE << "HeaderPersistence: persisting " << headers.size() << " headers";
     if (headers.empty()) return;
+    SILK_TRACE << "HeaderPersistence: persisting " << headers.size() << " headers";
 
     StopWatch measure_curr_scope;                  // only for test
     auto start_time = measure_curr_scope.start();  // only for test

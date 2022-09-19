@@ -38,13 +38,6 @@ auto HeadersStage::forward(db::RWTxn& tx) -> Stage::Result {
     timing.start();
     log::Info(log_prefix_) << "Start";
 
-    // TODO Why check only here ?
-    // What if downloader stops during the below while loop ?
-    if (!block_downloader_.is_running()) {
-        log::Error(log_prefix_) << "Aborted, block exchange is down";
-        return Stage::Result::Error;
-    }
-
     try {
         HeaderPersistence header_persistence(tx);
 
@@ -81,19 +74,19 @@ auto HeadersStage::forward(db::RWTxn& tx) -> Stage::Result {
                 // check the result of withdrawal command
                 auto [stable_headers, in_sync] = withdraw_command->result().get();  // blocking
                 if (!stable_headers.empty()) {
-                    if (stable_headers.size() > 100000) {
+                    if (stable_headers.size() > 100'000) {
                         log::Info(log_prefix_) << "Inserting headers...";
                     }
-                    StopWatch insertion_timing;
-                    insertion_timing.start();
+
+                    StopWatch insertion_timing(/*auto_start=*/true);
 
                     // persist headers
                     header_persistence.persist(stable_headers);
                     current_height_ = header_persistence.highest_height();
 
-                    if (stable_headers.size() > 100000) {
-                        log::Info(log_prefix_) << "Inserted headers tot=" << stable_headers.size()
-                                               << " (duration=" << StopWatch::format(insertion_timing.lap_duration()) << "s)";
+                    if (stable_headers.size() > 100'000) {
+                        log::Info(log_prefix_, {"inserted headers", std::to_string(stable_headers.size()),
+                                                "in", StopWatch::format(insertion_timing.lap_duration())});
                     }
                 }
 
@@ -111,13 +104,14 @@ auto HeadersStage::forward(db::RWTxn& tx) -> Stage::Result {
             }
         }
 
-        result = Stage::Result::Done;
+        if (is_stopping()) return Stage::Result::Error;
 
+        result = Stage::Result::Done;
         if (header_persistence.unwind_needed()) {
             result = Result::UnwindNeeded;
             shared_status_.unwind_point = header_persistence.unwind_point();
             // no need to set result.bad_block
-            log::Info(log_prefix_) << "Unwind needed";
+            log::Warning(log_prefix_) << "Unwind needed";
         }
 
         auto headers_downloaded = header_persistence.highest_height() - header_persistence.initial_height();
@@ -195,37 +189,30 @@ auto HeadersStage::unwind(db::RWTxn& tx) -> Stage::Result {
 }
 
 auto HeadersStage::prune(db::RWTxn&) -> Stage::Result {
-    return Stage::Result::Error;
+    return Stage::Result::Done;
 }
 
 // Request new headers from peers
 void HeadersStage::send_header_requests() {
-    // if (!sentry_.ready()) return;
-
     auto message = std::make_shared<OutboundGetBlockHeaders>();
-
-    block_downloader_.accept(message);
+    block_downloader_.enqueue_outgoing_message(message);
 }
 
 // New block hash announcements propagation
 void HeadersStage::send_announcements() {
-    // if (!sentry_.ready()) return;
-
     auto message = std::make_shared<OutboundNewBlockHashes>();
-
-    block_downloader_.accept(message);
+    block_downloader_.enqueue_outgoing_message(message);
 }
 
-auto HeadersStage::sync_header_chain(BlockNum highest_in_db) -> std::shared_ptr<InternalMessage<void>> {
+std::shared_ptr<InternalMessage<void>> HeadersStage::sync_header_chain(BlockNum highest_in_db) {
     auto message = std::make_shared<InternalMessage<void>>(
         [highest_in_db](HeaderChain& wc, BodySequence&) { wc.sync_current_state(highest_in_db); });
 
-    block_downloader_.accept(message);
-
+    block_downloader_.enqueue_outgoing_message(message);
     return message;
 }
 
-auto HeadersStage::withdraw_stable_headers() -> std::shared_ptr<InternalMessage<std::tuple<Headers, bool>>> {
+std::shared_ptr<InternalMessage<std::tuple<Headers, bool>>> HeadersStage::withdraw_stable_headers() {
     using result_t = std::tuple<Headers, bool>;
 
     auto message = std::make_shared<InternalMessage<result_t>>([](HeaderChain& wc, BodySequence&) {
@@ -234,17 +221,16 @@ auto HeadersStage::withdraw_stable_headers() -> std::shared_ptr<InternalMessage<
         return result_t{std::move(headers), in_sync};
     });
 
-    block_downloader_.accept(message);
+    block_downloader_.enqueue_outgoing_message(message);
 
     return message;
 }
 
-auto HeadersStage::update_bad_headers(std::set<Hash> bad_headers) -> std::shared_ptr<InternalMessage<void>> {
+std::shared_ptr<InternalMessage<void>> HeadersStage::update_bad_headers(std::set<Hash> bad_headers) {
     auto message = std::make_shared<InternalMessage<void>>(
         [bads = std::move(bad_headers)](HeaderChain& wc, BodySequence&) { wc.add_bad_headers(bads); });
 
-    block_downloader_.accept(message);
-
+    block_downloader_.enqueue_outgoing_message(message);
     return message;
 }
 
@@ -259,5 +245,4 @@ std::vector<std::string> HeadersStage::get_log_progress() {  // implementation M
             "headers/secs", std::to_string(height_progress.throughput()),
             "peers", std::to_string(peers)};
 }
-
 }  // namespace silkworm

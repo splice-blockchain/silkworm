@@ -80,9 +80,10 @@ class HeadersStage final : public Stage {
   private:
     void send_header_requests();  // send requests for more headers
     void send_announcements();
-    auto sync_header_chain(BlockNum highest_in_db) -> std::shared_ptr<InternalMessage<void>>;
-    auto withdraw_stable_headers() -> std::shared_ptr<InternalMessage<std::tuple<Headers, bool>>>;
-    auto update_bad_headers(std::set<Hash>) -> std::shared_ptr<InternalMessage<void>>;
+
+    std::shared_ptr<InternalMessage<void>> sync_header_chain(BlockNum highest_in_db);
+    std::shared_ptr<InternalMessage<std::tuple<Headers, bool>>> withdraw_stable_headers();
+    std::shared_ptr<InternalMessage<void>> update_bad_headers(std::set<Hash>);
 
     std::vector<std::string> get_log_progress() override;  // thread safe
     std::atomic<BlockNum> current_height_{0};

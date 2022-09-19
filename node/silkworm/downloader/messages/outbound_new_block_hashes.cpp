@@ -28,11 +28,7 @@ void OutboundNewBlockHashes::execute(db::ROAccess, HeaderChain& hc, BodySequence
     using namespace std::literals::chrono_literals;
 
     auto& announces_to_do = hc.announces_to_do();
-
-    if (announces_to_do.empty()) {
-        SILK_TRACE << "No OutboundNewBlockHashes (announcements) message to send";
-        return;
-    }
+    if (announces_to_do.empty()) return;
 
     for (auto& announce : announces_to_do) {
         // packet_.emplace_back(announce.hash, announce.number); // requires c++20

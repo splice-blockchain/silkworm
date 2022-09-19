@@ -27,11 +27,7 @@ void OutboundNewBlock::execute(db::ROAccess, HeaderChain&, BodySequence& bs, Sen
     using namespace std::literals::chrono_literals;
 
     auto& announces_to_do = bs.announces_to_do();
-
-    if (announces_to_do.empty()) {
-        SILK_TRACE << "No OutboundNewBlock (announcements) message to send";
-        return;
-    }
+    if (announces_to_do.empty()) return;
 
     seconds_t timeout = 1s;
     while (!announces_to_do.empty()) {

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <boost/signals2.hpp>
 #include <p2psentry/sentry.grpc.pb.h>
 
 #include <silkworm/chain/identity.hpp>
@@ -36,7 +37,6 @@ namespace silkworm {
 class SentryClient final : public rpc::Client<sentry::Sentry>, public Worker {
   public:
     using base_t = rpc::Client<sentry::Sentry>;
-    using subscriber_t = std::function<void(const sentry::InboundMessage&)>;
 
     explicit SentryClient(const std::string& sentry_addr);  // connect to the remote sentry
 
@@ -52,19 +52,14 @@ class SentryClient final : public rpc::Client<sentry::Sentry>, public Worker {
 
     using base_t::exec_remotely;  // exec_remotely(SentryRpc& rpc) sends a rpc request to the remote sentry
 
-    //! Register a subscription for messages notifications
-    void register_subscription(rpc::ReceiveMessages::Scope scope, subscriber_t callback);
-
     static rpc::ReceiveMessages::Scope scope(const sentry::InboundMessage& message);  // find the scope of the message
 
+    //! \brief Notifies connected handlers a message a message has been received
+    boost::signals2::signal<void(const sentry::InboundMessage& message)> signal_message_received;
+
   protected:
-    //! \brief Notify registered subscribers of incoming message
-    void notify_subscribers(const sentry::InboundMessage&);
-
     rpc::ReceiveMessages message_subscription_;
-    rpc::ReceivePeerStats receive_peer_stats_;
-
-    std::map<rpc::ReceiveMessages::Scope, std::list<subscriber_t>> subscribers_;  // todo: optimize
+    rpc::ReceivePeerStats stats_subscription_;
     std::atomic<uint64_t> active_peers_{0};
 
   private:

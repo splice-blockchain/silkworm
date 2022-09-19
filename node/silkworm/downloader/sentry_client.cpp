@@ -55,20 +55,6 @@ rpc::ReceiveMessages::Scope SentryClient::scope(const sentry::InboundMessage& me
     }
 }
 
-void SentryClient::register_subscription(rpc::ReceiveMessages::Scope scope, subscriber_t callback) {
-    // TODO This has to be revised
-    // Storing lambda callbacks can bring to undefined behavior if lambdas capture instances
-    // of objects destroyed
-    subscribers_[scope].push_back(std::move(callback));
-}
-
-void SentryClient::notify_subscribers(const sentry::InboundMessage& message) {
-    const auto& subscribers = subscribers_[scope(message)];
-    for (auto& subscriber : subscribers) {
-        subscriber(message);
-    }
-}
-
 void SentryClient::set_status(Hash head_hash, BigInt head_td, const ChainIdentity& chain_identity) {
     rpc::SetStatus set_status{chain_identity, head_hash, head_td};
     exec_remotely(set_status);
@@ -119,40 +105,39 @@ void SentryClient::work() {
            thread_stats_state_.load() == Worker::State::kStarted &&
            message_subscription_.receive_one_reply()) {
         const auto& message = message_subscription_.reply();
-        notify_subscribers(message);
+        signal_message_received(message);
     }
+    signal_message_received.disconnect_all_slots();
+    message_subscription_.try_cancel();
 }
 
 void SentryClient::work_stats() {
     // send a stats subscription
     // rpc::ReceivePeerStats receive_peer_stats;
-    exec_remotely(receive_peer_stats_);
+    exec_remotely(stats_subscription_);
 
     // ask the remote sentry about the current active peers
     update_active_peers_count();
 
     // receive stats
-    while (is_running()) {
-        log::Trace(log::get_thread_name()) << "receiving stats";
-        if (receive_peer_stats_.receive_one_reply()) {
-            const sentry::PeerEvent& stat = receive_peer_stats_.reply();
-            const auto peerId = bytes_from_H512(stat.peer_id());
-            const char* event = "";
-            if (stat.event_id() == sentry::PeerEvent::Connect) {
-                event = "connected";
-                ++active_peers_;
-            } else {
-                event = "disconnected";
-                if (active_peers_ > 0) --active_peers_;  // workaround, to fix this we need to improve the interface
-            }                                            // or issue a count_active_peers()
+    while (is_running() && stats_subscription_.receive_one_reply()) {
+        const sentry::PeerEvent& stat = stats_subscription_.reply();
+        const auto peerId = bytes_from_H512(stat.peer_id());
+        const char* event = "";
+        if (stat.event_id() == sentry::PeerEvent::Connect) {
+            event = "connected";
+            ++active_peers_;
+        } else {
+            event = "disconnected";
+            if (active_peers_ > 0) --active_peers_;  // workaround, to fix this we need to improve the interface
+        }                                            // or issue a count_active_peers()
 
-            log::Trace("SentryClient",
-                       {"peer", event,
-                        "id", to_hex(human_readable_id(peerId)),
-                        "active", std::to_string(active_peers_)});
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        log::Trace("SentryClient",
+                   {"peer", event,
+                    "id", to_hex(human_readable_id(peerId)),
+                    "active", std::to_string(active_peers_)});
     }
+    stats_subscription_.try_cancel();
 }
 
 void SentryClient::hand_shake() {

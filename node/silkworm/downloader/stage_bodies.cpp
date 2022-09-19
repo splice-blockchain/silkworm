@@ -183,7 +183,7 @@ auto BodiesStage::prune(db::RWTxn&) -> Stage::Result {
 void BodiesStage::send_body_requests() {
     auto message = std::make_shared<OutboundGetBlockBodies>();
 
-    block_downloader_.accept(message);
+    block_downloader_.enqueue_outgoing_message(message);
 }
 
 auto BodiesStage::sync_body_sequence(BlockNum highest_body, BlockNum highest_header)
@@ -193,7 +193,7 @@ auto BodiesStage::sync_body_sequence(BlockNum highest_body, BlockNum highest_hea
             bs.sync_current_state(highest_body, highest_header);
         });
 
-    block_downloader_.accept(message);
+    block_downloader_.enqueue_outgoing_message(message);
 
     return message;
 }
@@ -205,7 +205,7 @@ auto BodiesStage::withdraw_ready_bodies() -> std::shared_ptr<InternalMessage<std
         return bs.withdraw_ready_bodies();
     });
 
-    block_downloader_.accept(message);
+    block_downloader_.enqueue_outgoing_message(message);
 
     return message;
 }
@@ -214,7 +214,7 @@ auto BodiesStage::withdraw_ready_bodies() -> std::shared_ptr<InternalMessage<std
 void BodiesStage::send_announcements() {
     auto message = std::make_shared<OutboundNewBlock>();
 
-    block_downloader_.accept(message);
+    block_downloader_.enqueue_outgoing_message(message);
 }
 
 std::vector<std::string> BodiesStage::get_log_progress() {  // implementation MUST be thread safe

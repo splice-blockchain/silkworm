@@ -16,7 +16,6 @@
 
 #include <iostream>
 #include <string>
-#include <thread>
 
 #include <CLI/CLI.hpp>
 #include <boost/format.hpp>
@@ -202,9 +201,14 @@ class DownloaderLoop final : public Worker {
         }
 
         if (block_exchange_) block_exchange_->stop(/*wait*/ true);
+        log::Trace("After block_exchange_->stop");
         if (sentry_client_) sentry_client_->stop(/*wait*/ true);
+        log::Trace("After sentry_client_->stop");
+
         block_exchange_.reset();
+        log::Trace("After block_exchange_.reset()");
         sentry_client_.reset();
+        log::Trace("After sentry_client_.reset();");
 
         log_timer.stop();
         log::Info("Downloader") << "Ended";
@@ -212,10 +216,13 @@ class DownloaderLoop final : public Worker {
 
     std::string get_log_prefix() const {
         static const std::string log_prefix_fmt{"[%u/%u %s]"};
-        return boost::str(boost::format(log_prefix_fmt) %
-                          current_stage_number_ %
-                          current_stages_count_ %
-                          current_stage_->first);
+        if (is_running()) {
+            return boost::str(boost::format(log_prefix_fmt) %
+                              current_stage_number_ %
+                              current_stages_count_ %
+                              current_stage_->first);
+        }
+        return log::get_thread_name();
     }
 
     void stop_stages() {
@@ -332,10 +339,8 @@ int main(int argc, char* argv[]) {
         DownloaderLoop downloader_loop(&node_settings, &sentry_client_settings, &env);
         downloader_loop.start(/*wait=*/false);
         while (downloader_loop.get_state() != Worker::State::kStopped) {
+            if (SignalHandler::signalled()) downloader_loop.stop(true);
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            if (SignalHandler::signalled()) {
-                downloader_loop.stop(true);
-            }
         }
 
         asio_guard.reset();
