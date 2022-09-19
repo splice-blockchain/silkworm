@@ -47,22 +47,17 @@ class SentryClient final : public rpc::Client<sentry::Sentry>, public Worker {
     void stop(bool wait) final;
 
     void set_status(Hash head_hash, BigInt head_td, const ChainIdentity&);  // init the remote sentry
-
-    uint64_t active_peers();  // return cached peers count
-
-    using base_t::exec_remotely;  // exec_remotely(SentryRpc& rpc) sends a rpc request to the remote sentry
-
-    static rpc::ReceiveMessages::Scope scope(const sentry::InboundMessage& message);  // find the scope of the message
+    uint64_t active_peers() const;                                          // return cached peers count
+    using base_t::exec_remotely;                                            // exec_remotely(SentryRpc& rpc) sends a rpc request to the remote sentry
 
     //! \brief Notifies connected handlers a message a message has been received
     boost::signals2::signal<void(const sentry::InboundMessage& message)> signal_message_received;
 
-  protected:
-    rpc::ReceiveMessages message_subscription_;
-    rpc::ReceivePeerStats stats_subscription_;
-    std::atomic<uint64_t> active_peers_{0};
-
   private:
+    rpc::ReceiveMessages message_stream_;    // Keeps receiving replies to request messages
+    rpc::ReceivePeerStats stats_stream_;     // Keeps receiving sentry's events and stats
+    std::atomic<uint64_t> active_peers_{0};  // Local cache of active peers in sentry
+
     std::unique_ptr<std::thread> thread_stats_{nullptr};  // Ancillary thread work for stats receiving
     std::atomic<Worker::State> thread_stats_state_{Worker::State::kStopped};
     std::condition_variable thread_stats_cv_;  // To track its start

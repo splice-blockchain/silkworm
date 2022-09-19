@@ -35,24 +35,9 @@ static std::shared_ptr<grpc::Channel> create_custom_channel(const std::string& s
 SentryClient::SentryClient(const std::string& sentry_addr)
     : Worker("SentryClient"),
       base_t(create_custom_channel(sentry_addr)),
-      message_subscription_(rpc::ReceiveMessages::Scope::BlockAnnouncements |
-                            rpc::ReceiveMessages::Scope::BlockRequests) {
+      message_stream_(rpc::ReceiveMessages::Scope::BlockAnnouncements |
+                      rpc::ReceiveMessages::Scope::BlockRequests) {
     log::Info("SentryClient", {"remote", sentry_addr}) << " connecting ...";
-}
-
-rpc::ReceiveMessages::Scope SentryClient::scope(const sentry::InboundMessage& message) {
-    switch (message.id()) {
-        case sentry::MessageId::BLOCK_HEADERS_66:
-        case sentry::MessageId::BLOCK_BODIES_66:
-        case sentry::MessageId::NEW_BLOCK_HASHES_66:
-        case sentry::MessageId::NEW_BLOCK_66:
-            return rpc::ReceiveMessages::Scope::BlockAnnouncements;
-        case sentry::MessageId::GET_BLOCK_HEADERS_66:
-        case sentry::MessageId::GET_BLOCK_BODIES_66:
-            return rpc::ReceiveMessages::Scope::BlockRequests;
-        default:
-            return rpc::ReceiveMessages::Scope::Other;
-    }
 }
 
 void SentryClient::set_status(Hash head_hash, BigInt head_td, const ChainIdentity& chain_identity) {
@@ -62,8 +47,8 @@ void SentryClient::set_status(Hash head_hash, BigInt head_td, const ChainIdentit
 }
 
 void SentryClient::stop(bool wait) {
-    message_subscription_.try_cancel();
-    stats_subscription_.try_cancel();
+    message_stream_.try_cancel();
+    stats_stream_.try_cancel();
 
     Worker::stop(wait);  // Stops work thread
 
@@ -79,7 +64,7 @@ void SentryClient::work() {
 
     // send a message subscription
     // rpc::ReceiveMessages message_subscription(Scope::BlockAnnouncements | Scope::BlockRequests);
-    exec_remotely(message_subscription_);
+    exec_remotely(message_stream_);
 
     // Spawn receiving stats thread
     thread_stats_ = std::make_unique<std::thread>([&]() {
@@ -107,25 +92,24 @@ void SentryClient::work() {
     // Begin receive messages
     while (is_running() &&
            thread_stats_state_.load() == Worker::State::kStarted &&
-           message_subscription_.receive_one_reply()) {
-        const auto& message = message_subscription_.reply();
+           message_stream_.receive_one_reply()) {
+        const auto& message = message_stream_.reply();
         signal_message_received(message);
     }
     signal_message_received.disconnect_all_slots();
-    message_subscription_.try_cancel();
 }
 
 void SentryClient::work_stats() {
     // send a stats subscription
     // rpc::ReceivePeerStats receive_peer_stats;
-    exec_remotely(stats_subscription_);
+    exec_remotely(stats_stream_);
 
     // ask the remote sentry about the current active peers
     update_active_peers_count();
 
     // receive stats
-    while (is_running() && stats_subscription_.receive_one_reply() /* is this blocking ????? */) {
-        const sentry::PeerEvent& stat = stats_subscription_.reply();
+    while (is_running() && stats_stream_.receive_one_reply() /* is this blocking ????? */) {
+        const sentry::PeerEvent& stat = stats_stream_.reply();
         const auto peerId = bytes_from_H512(stat.peer_id());
         const char* event = "";
         if (stat.event_id() == sentry::PeerEvent::Connect) {
@@ -141,7 +125,6 @@ void SentryClient::work_stats() {
                     "id", to_hex(human_readable_id(peerId)),
                     "active", std::to_string(active_peers_)});
     }
-    stats_subscription_.try_cancel();
 }
 
 void SentryClient::hand_shake() {
@@ -174,7 +157,7 @@ void SentryClient::update_active_peers_count() {
     active_peers_.store(peers.count());
 }
 
-uint64_t SentryClient::active_peers() {
+uint64_t SentryClient::active_peers() const {
     return active_peers_.load();
 }
 }  // namespace silkworm
