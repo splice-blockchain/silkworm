@@ -130,9 +130,6 @@ void SignalHandler::handle(int sig_code) {
         digit_with_endl[2] = '\0';
         std::fputs(digit_with_endl, stderr);
     }
-    if (custom_handler_) {
-        custom_handler_(sig_code);
-    }
     signal(sig_code, &SignalHandler::handle);  // Re-enable the hook
 }
 
