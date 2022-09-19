@@ -62,8 +62,12 @@ void SentryClient::set_status(Hash head_hash, BigInt head_td, const ChainIdentit
 }
 
 void SentryClient::stop(bool wait) {
-    Worker::stop(wait);
-    // Regardless "wait" we do need to join stats thread
+    message_subscription_.try_cancel();
+    stats_subscription_.try_cancel();
+
+    Worker::stop(wait);  // Stops work thread
+
+    // Regardless "wait" we do need to join stats thread as ww own it
     if (thread_stats_) {
         thread_stats_->join();
         thread_stats_.reset();
