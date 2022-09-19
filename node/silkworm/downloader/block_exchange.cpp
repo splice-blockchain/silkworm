@@ -57,7 +57,6 @@ void BlockExchange::enqueue_incoming_message(const sentry::InboundMessage& raw_m
         auto message = InboundMessage::make(raw_message);
         messages_.push(message);
         kick();  // Signals Worker there's work to do
-
     } catch (rlp::DecodingError& error) {
         PeerId peer_id = bytes_from_H512(raw_message.peer_id());
         log::Trace("Ignored malformed message",
@@ -80,7 +79,7 @@ void BlockExchange::work() {
     auto constexpr kShortInterval{1s};
     auto next_status_update{std::chrono::steady_clock::now()};
 
-    while (wait_for_kick()) {
+    while (wait_for_kick(/*timeout_milliseconds=*/5)) {
         std::shared_ptr<Message> message;
         // Consume the whole queue
         while (messages_.try_pop(message)) {

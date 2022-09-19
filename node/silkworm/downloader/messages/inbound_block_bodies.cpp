@@ -55,5 +55,4 @@ std::string InboundBlockBodies::content() const {
     content << packet_;
     return content.str();
 }
-
 }  // namespace silkworm
