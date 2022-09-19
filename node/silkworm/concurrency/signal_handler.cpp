@@ -103,13 +103,11 @@ inline constexpr int kHandleableCodes[] {
 std::atomic_uint32_t SignalHandler::sig_count_{0};
 std::atomic_int SignalHandler::sig_code_{0};
 std::atomic_bool SignalHandler::signalled_{false};
-std::function<void(int)> SignalHandler::custom_handler_;
 
-void SignalHandler::init(std::function<void(int)> custom_handler) {
+void SignalHandler::init() {
     for (const int sig_code : kHandleableCodes) {
         signal(sig_code, &SignalHandler::handle);
     }
-    custom_handler_ = custom_handler;
 }
 
 void SignalHandler::handle(int sig_code) {
