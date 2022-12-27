@@ -46,7 +46,7 @@ using awaitable = boost::asio::awaitable<T, Executor>;
 template <typename Executor = boost::asio::any_io_executor>
 using use_awaitable_t = boost::asio::use_awaitable_t<Executor>;
 
-using boost::asio::experimental::deferred;
+using boost::asio::deferred;
 
 namespace this_coro {
     using boost::asio::this_coro::executor;

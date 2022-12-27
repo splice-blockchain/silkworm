@@ -33,8 +33,8 @@ if(NOT SILKWORM_HAS_PARENT)
 
   include(third_party/evmone/cmake/cable/HunterGate.cmake)
   HunterGate(
-    URL "https://github.com/cpp-pm/hunter/archive/v0.24.3.tar.gz"
-    SHA1 "10738b59e539818a01090e64c2d09896247530c7"
+    URL "https://github.com/cpp-pm/hunter/archive/v0.24.11.tar.gz"
+    SHA1 "e49fb20a135675e406e95fbe9a591a630ccbbeaf"
     LOCAL
     )
 endif()
