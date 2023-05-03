@@ -131,6 +131,7 @@ class EthereumRpcApi {
     // GLAZE format routine
     awaitable<void> handle_eth_get_logs(const nlohmann::json& request, std::string& reply);
     awaitable<void> handle_eth_call(const nlohmann::json& request, std::string& reply);
+    awaitable<void> handle_eth_call_many(const nlohmann::json& request, std::string& reply);
 
     Context& context_;
     std::shared_ptr<BlockCache>& block_cache_;
