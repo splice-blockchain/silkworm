@@ -140,7 +140,7 @@ class IntraBlockState {
 
     // unique_ptr for pointer stability of values
     // see https://abseil.io/docs/cpp/guides/container#recommendation
-    FlatHashMap<evmc::bytes32, std::unique_ptr<Bytes>> new_code_;
+    FlatHashMap<evmc::bytes32, Bytes> new_code_;
 
     std::vector<std::unique_ptr<state::Delta>> journal_;
 
